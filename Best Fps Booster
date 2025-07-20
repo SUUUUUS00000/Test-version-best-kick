@@ -2,7 +2,6 @@ local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local CollectionService = game:GetService("CollectionService")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
@@ -11,44 +10,37 @@ local os_clock = os.clock
 local table_insert = table.insert
 local table_remove = table.remove
 local math_floor = math.floor
-local math_huge = math.huge
 local ipairs = ipairs
-local pcall = pcall
 local Vector3_new = Vector3.new
 
---[[ PerformanceGovernor: Управляет профилями производительности и плавно переходит между ними ]]
 local PerformanceGovernor = {}
 PerformanceGovernor.PROFILES = {
     Low = {
         label = "Low",
         fpsThreshold = 25,
-        lodDistances = {40, 80, 150, 300},
+        lodDistances = {40, 80, 150},
         maxTasksPerFrame = 3,
-        particleAllowance = {High = 0.1, Medium = 0.3, Low = 0.5},
+        particleAllowance = 0.3,
         maxActiveEffects = 15,
-        physicsDistance = 100,
     },
     Medium = {
         label = "Medium",
         fpsThreshold = 45,
-        lodDistances = {70, 150, 250, 500},
+        lodDistances = {70, 150, 250},
         maxTasksPerFrame = 5,
-        particleAllowance = {High = 0.5, Medium = 0.7, Low = 1.0},
+        particleAllowance = 0.7,
         maxActiveEffects = 40,
-        physicsDistance = 200,
     },
     High = {
         label = "High",
-        fpsThreshold = math_huge,
-        lodDistances = {90, 180, 350, 1000},
+        fpsThreshold = 999,
+        lodDistances = {90, 180, 350},
         maxTasksPerFrame = 8,
-        particleAllowance = {High = 1.0, Medium = 1.0, Low = 1.0},
+        particleAllowance = 1.0,
         maxActiveEffects = 80,
-        physicsDistance = math_huge,
     },
 }
-PerformanceGovernor._targetProfile = PerformanceGovernor.PROFILES.High
-PerformanceGovernor._activeSettings = table.clone(PerformanceGovernor.PROFILES.High)
+PerformanceGovernor._currentProfile = PerformanceGovernor.PROFILES.High
 PerformanceGovernor._fpsHistory = {}
 PerformanceGovernor._lastCheck = 0
 PerformanceGovernor._totalDeltaTime = 0
@@ -56,31 +48,15 @@ PerformanceGovernor._historyIndex = 1
 
 function PerformanceGovernor:GetAverageFPS()
     local count = #self._fpsHistory
-    return if count > 0 then count / self._totalDeltaTime else 60
-end
-
-function PerformanceGovernor:InterpolateSettings(dt)
-    local target = self._targetProfile
-    local active = self._activeSettings
-    local alpha = math.min(1, dt * 2) -- Скорость интерполяции (0.5 сек до цели)
-
-    active.maxTasksPerFrame = active.maxTasksPerFrame + (target.maxTasksPerFrame - active.maxTasksPerFrame) * alpha
-    active.maxActiveEffects = active.maxActiveEffects + (target.maxActiveEffects - active.maxActiveEffects) * alpha
-    active.physicsDistance = active.physicsDistance + (target.physicsDistance - active.physicsDistance) * alpha
-
-    for i = 1, #active.lodDistances do
-        active.lodDistances[i] = active.lodDistances[i] + (target.lodDistances[i] - active.lodDistances[i]) * alpha
-    end
-    for k, v in pairs(active.particleAllowance) do
-        active.particleAllowance[k] = v + (target.particleAllowance[k] - v) * alpha
-    end
+    if count == 0 then return 60 end
+    return count / self._totalDeltaTime
 end
 
 function PerformanceGovernor:Update(deltaTime)
     local history = self._fpsHistory
     if #history < 30 then
         table_insert(history, deltaTime)
-        self._totalDeltaTime += deltaTime
+        self._totalDeltaTime = self._totalDeltaTime + deltaTime
     else
         local oldDelta = history[self._historyIndex]
         self._totalDeltaTime = self._totalDeltaTime - oldDelta + deltaTime
@@ -88,8 +64,6 @@ function PerformanceGovernor:Update(deltaTime)
         self._historyIndex = (self._historyIndex % 30) + 1
     end
     
-    self:InterpolateSettings(deltaTime)
-
     local now = os_clock()
     if now - self._lastCheck < 1 then return end
     self._lastCheck = now
@@ -105,43 +79,49 @@ function PerformanceGovernor:Update(deltaTime)
         newProfile = self.PROFILES.Low
     end
     
-    if newProfile ~= self._targetProfile then
-        self._targetProfile = newProfile
+    if newProfile ~= self._currentProfile then
+        self._currentProfile = newProfile
+        _G.Scheduler:SetMaxTasks(newProfile.maxTasksPerFrame)
         _G.LODSystem:ApplyProfile(newProfile)
-        _G.PhysicsGovernor:ApplyProfile(newProfile)
     end
 end
 
---[[ Scheduler: Выполняет задачи с ограничением по времени на кадр ]]
 local Scheduler = {}
 _G.Scheduler = Scheduler
 Scheduler._tasks = {}
+Scheduler._MAX_TASKS_PER_FRAME = PerformanceGovernor.PROFILES.High.maxTasksPerFrame
+
+function Scheduler:SetMaxTasks(num)
+    self._MAX_TASKS_PER_FRAME = num
+end
 
 function Scheduler:AddTask(fn, interval, priority)
-    local newTask = {fn = fn, interval = interval or 0, lastRun = 0, priority = priority or 0}
-    for i = 1, #self._tasks + 1 do
-        if not self._tasks[i] or priority > self._tasks[i].priority then
-            table_insert(self._tasks, i, newTask)
+    local newTask = {fn=fn, interval=interval, lastRun=0, priority=priority or 0}
+    local tasks = self._tasks
+    for i = 1, #tasks do
+        if newTask.priority > tasks[i].priority then
+            table_insert(tasks, i, newTask)
             return newTask
         end
     end
+    table_insert(tasks, newTask)
+    return newTask
 end
 
 function Scheduler:Run()
     local now = os_clock()
-    local maxTasks = PerformanceGovernor._activeSettings.maxTasksPerFrame
     local processed = 0
-    for _, task in ipairs(self._tasks) do
+    for i = 1, #self._tasks do
+        local task = self._tasks[i]
         if now - task.lastRun >= task.interval then
             task.lastRun = now
             task.fn()
             processed += 1
-            if processed >= maxTasks then break end
+            if processed >= self._MAX_TASKS_PER_FRAME then break end
         end
     end
 end
 
---[[ ObjectPool: Управляет переиспользованием объектов, теперь с приоритетами ]]
 local ObjectPool = {}
 _G.ObjectPool = ObjectPool
 ObjectPool._active = {}
@@ -149,13 +129,12 @@ ObjectPool._inactive = {}
 ObjectPool._templates = {}
 ObjectPool._objectToTemplate = setmetatable({}, {__mode = "k"})
 ObjectPool._objectToIndex = setmetatable({}, {__mode = "k"})
-local PRIORITY_MAP = {High = 1, Medium = 2, Low = 3}
 
 function ObjectPool:Preload(templateName, count)
     local template = ReplicatedStorage.Assets:FindFirstChild(templateName)
     if not template then return end
     self._templates[templateName] = template
-    self._inactive[templateName] = {}
+    self._inactive[templateName] = self._inactive[templateName] or {}
     for _ = 1, count do
         local obj = template:Clone()
         obj.Parent = nil
@@ -163,20 +142,17 @@ function ObjectPool:Preload(templateName, count)
     end
 end
 
-function ObjectPool:Get(templateName, priority)
-    local settings = PerformanceGovernor._activeSettings
-    priority = priority or "Medium"
-
+function ObjectPool:Get(templateName)
+    local profile = PerformanceGovernor._currentProfile
     local activePool = self._active[templateName] or {}
     self._active[templateName] = activePool
     
-    if #activePool >= settings.maxActiveEffects or math.random() > settings.particleAllowance[priority] then
+    if #activePool >= profile.maxActiveEffects or math.random() > profile.particleAllowance then
         return nil
     end
 
-    local inactivePool = self._inactive[templateName] or {}
-    self._inactive[templateName] = inactivePool
-    local obj = if #inactivePool > 0 then table_remove(inactivePool) else self._templates[templateName]:Clone()
+    local inactivePool = self._inactive[templateName]
+    local obj = (#inactivePool > 0) and table_remove(inactivePool) or self._templates[templateName]:Clone()
     
     table_insert(activePool, obj)
     self._objectToTemplate[obj] = templateName
@@ -185,15 +161,29 @@ function ObjectPool:Get(templateName, priority)
     return obj
 end
 
+local function resetObjectState(obj)
+    obj.Parent = nil
+    if obj:IsA("BasePart") then
+        obj.Transparency = 0
+    end
+end
+
 function ObjectPool:Return(obj)
     local templateName = self._objectToTemplate[obj]
-    if not templateName then return obj:Destroy() end
-    
-    obj.Parent = nil
+    if not (templateName and self._active[templateName]) then
+        obj:Destroy()
+        return
+    end
+
+    resetObjectState(obj)
     
     local activePool = self._active[templateName]
     local index = self._objectToIndex[obj]
-    if not (activePool and index and activePool[index] == obj) then return obj:Destroy() end
+
+    if not index or activePool[index] ~= obj then
+        obj:Destroy()
+        return
+    end
 
     local lastObj = table_remove(activePool)
     if lastObj ~= obj then
@@ -205,37 +195,37 @@ function ObjectPool:Return(obj)
     table_insert(self._inactive[templateName], obj)
 end
 
---[[ SpatialSystem: Эффективно находит объекты в пространстве ]]
 local SpatialSystem = {}
 _G.SpatialSystem = SpatialSystem
 SpatialSystem._partitionSize = 128
 SpatialSystem._partitions = {}
 SpatialSystem._objectToPartitionData = setmetatable({}, {__mode = "k"})
-local _nearbyResultBuffer = {}
 
 function SpatialSystem:_getPartitionCoords(pos)
-    local size = self._partitionSize
-    return math_floor(pos.X / size), math_floor(pos.Z / size)
+    return math_floor(pos.X / self._partitionSize), math_floor(pos.Z / self._partitionSize)
 end
 
 function SpatialSystem:AddObject(obj)
     local x, z = self:_getPartitionCoords(obj.Position)
     local id = x .. "," .. z
     self._partitions[id] = self._partitions[id] or {}
-    local partition = self._partitions[id]
-    table_insert(partition, obj)
-    self._objectToPartitionData[obj] = {id = id, index = #partition}
+    local part = self._partitions[id]
+    table_insert(part, obj)
+    self._objectToPartitionData[obj] = {id = id, index = #part}
 end
 
 function SpatialSystem:RemoveObject(obj)
     local data = self._objectToPartitionData[obj]
-    if not data or not self._partitions[data.id] then return end
+    if not data then return end
     
-    local partition = self._partitions[data.id]
+    local part = self._partitions[data.id]
+    if not part or #part == 0 then return end
+    
     local idx = data.index
-    local last = table_remove(partition)
+    local last = table_remove(part)
+
     if last ~= obj then
-        partition[idx] = last
+        part[idx] = last
         self._objectToPartitionData[last].index = idx
     end
     self._objectToPartitionData[obj] = nil
@@ -243,75 +233,66 @@ end
 
 function SpatialSystem:UpdateObject(obj)
     local oldData = self._objectToPartitionData[obj]
-    local x, z = self:_getPartitionCoords(obj.Position)
-    local newId = x .. "," .. z
     if not oldData then
         self:AddObject(obj)
-    elseif oldData.id ~= newId then
+        return
+    end
+    local x, z = self:_getPartitionCoords(obj.Position)
+    if oldData.id ~= (x .. "," .. z) then
         self:RemoveObject(obj)
         self:AddObject(obj)
     end
 end
 
 function SpatialSystem:GetNearby(pos)
-    table.clear(_nearbyResultBuffer)
+    local results = {}
     local cx, cz = self:_getPartitionCoords(pos)
     for x = cx - 1, cx + 1 do
         for z = cz - 1, cz + 1 do
-            local partition = self._partitions[x .. "," .. z]
-            if partition then
-                for _, obj in ipairs(partition) do
-                    table_insert(_nearbyResultBuffer, obj)
+            local id = x .. "," .. z
+            local part = self._partitions[id]
+            if part then
+                for _, o in ipairs(part) do
+                    table_insert(results, o)
                 end
             end
         end
     end
-    return _nearbyResultBuffer
+    return results
 end
 
---[[ LODSystem: Управляет уровнями детализации ]]
 local LODSystem = {}
 _G.LODSystem = LODSystem
 LODSystem._lodEntries = {}
 LODSystem._currentLevelsSqr = {}
-LODSystem._purgedObjects = setmetatable({}, {__mode="k"})
 
 function LODSystem:ApplyProfile(profile)
-    -- This is handled by the interpolator now, but we can set an initial state
+    local dist = profile.lodDistances
+    self._currentLevelsSqr = {
+        dist[1] * dist[1],
+        dist[2] * dist[2],
+        dist[3] * dist[3]
+    }
 end
 
 function LODSystem:RegisterModel(model)
     if not (model:IsA("Model") and model.PrimaryPart) then return end
     local entry = {
         primaryPart = model.PrimaryPart,
-        model = model,
         settings = {
             highTrans = model:GetAttribute("highTrans") or 0,
             medTrans = model:GetAttribute("medTrans") or 0.5,
-            lowTrans = model:GetAttribute("lowTrans") or 0.8,
-            cullTrans = 1
+            lowTrans = model:GetAttribute("lowTrans") or 0.8
         }
     }
     self._lodEntries[model.PrimaryPart] = entry
     SpatialSystem:AddObject(model.PrimaryPart)
 end
 
-function LODSystem:PurgeDecals(model)
-    if self._purgedObjects[model] then return end
-    for _, descendant in ipairs(model:GetDescendants()) do
-        if descendant:IsA("Decal") then
-            descendant:Destroy()
-        end
-    end
-    self._purgedObjects[model] = true
-end
-
 function LODSystem:Update(cameraPos)
-    local settings = PerformanceGovernor._activeSettings
-    local levels = settings.lodDistances
-    local levelsSqr = {levels[1]^2, levels[2]^2, levels[3]^2, levels[4]^2}
-    
-    for _, part in ipairs(SpatialSystem:GetNearby(cameraPos)) do
+    local nearbyObjects = SpatialSystem:GetNearby(cameraPos)
+    local levelsSqr = self._currentLevelsSqr
+    for _, part in ipairs(nearbyObjects) do
         local entry = self._lodEntries[part]
         if entry then
             local distanceSqr = (part.Position - cameraPos).MagnitudeSqr
@@ -321,13 +302,8 @@ function LODSystem:Update(cameraPos)
                 newTransparency = entry.settings.highTrans
             elseif distanceSqr < levelsSqr[2] then
                 newTransparency = entry.settings.medTrans
-            elseif distanceSqr < levelsSqr[3] then
-                newTransparency = entry.settings.lowTrans
             else
-                newTransparency = entry.settings.cullTrans
-                if PerformanceGovernor._targetProfile.label == "Low" and distanceSqr > levelsSqr[4] then
-                    self:PurgeDecals(entry.model)
-                end
+                newTransparency = entry.settings.lowTrans
             end
             
             if part.Transparency ~= newTransparency then
@@ -337,47 +313,8 @@ function LODSystem:Update(cameraPos)
     end
 end
 
---[[ PhysicsGovernor: Новый модуль для управления физикой ]]
-local PhysicsGovernor = {}
-_G.PhysicsGovernor = PhysicsGovernor
-PhysicsGovernor._trackedParts = {}
-PhysicsGovernor._physicsDistanceSqr = math_huge
-
-function PhysicsGovernor:ApplyProfile(profile)
-    -- This is handled by the interpolator
-end
-
-function PhysicsGovernor:Register(model)
-    if not model.PrimaryPart then return end
-    local partsData = {}
-    for _, part in ipairs(model:GetDescendants()) do
-        if part:IsA("BasePart") then
-            partsData[part] = part.Anchored
-            table_insert(self._trackedParts, part)
-        end
-    end
-    SpatialSystem:AddObject(model.PrimaryPart)
-end
-
-function PhysicsGovernor:Update(cameraPos)
-    local physicsDistanceSqr = PerformanceGovernor._activeSettings.physicsDistance ^ 2
-    for _, part in ipairs(self._trackedParts) do
-        if not part or not part.Parent then -- Cleanup
-            table_remove(self._trackedParts, table.find(self._trackedParts, part))
-            continue
-        end
-
-        local distanceSqr = (part.Position - cameraPos).MagnitudeSqr
-        local shouldBeAnchored = distanceSqr > physicsDistanceSqr
-
-        if part.Anchored ~= shouldBeAnchored then
-            part.Anchored = shouldBeAnchored
-        end
-    end
-end
-
---[[ Initialize ]]
 local function Initialize()
+    LODSystem:ApplyProfile(PerformanceGovernor.PROFILES.High)
     ObjectPool:Preload("ExplosionEffect", 20)
 
     local lodFolder = Workspace:FindFirstChild("LODModels")
@@ -387,22 +324,13 @@ local function Initialize()
         end
     end
     
-    for _, obj in ipairs(CollectionService:GetTagged("ManagedPhysics")) do
-        PhysicsGovernor:Register(obj)
-    end
-    CollectionService:GetInstanceAddedSignal("ManagedPhysics"):Connect(function(obj)
-        PhysicsGovernor:Register(obj)
-    end)
-    
     RunService.Heartbeat:Connect(function(deltaTime)
-        pcall(PerformanceGovernor.Update, PerformanceGovernor, deltaTime)
-        pcall(Scheduler.Run, Scheduler)
+        PerformanceGovernor:Update(deltaTime)
+        Scheduler:Run()
     end)
     
     Scheduler:AddTask(function()
-        local camPos = Camera.CFrame.Position
-        LODSystem:Update(camPos)
-        PhysicsGovernor:Update(camPos)
+        LODSystem:Update(Camera.CFrame.Position)
     end, 0.15, 100)
 end
 
