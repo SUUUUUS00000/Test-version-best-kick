@@ -1,479 +1,115 @@
-local RunService = game:GetService("RunService")
-local Players = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local CollectionService = game:GetService("CollectionService")
-local Stats = game:GetService("Stats")
-local Lighting = game:GetService("Lighting")
-local UserSettings = UserSettings()
-local GameSettings = UserSettings:GetService("UserGameSettings")
-
-local Maestro = {}
+-- Aetherius Engine v4.0 | Proactive Performance & Resource Core
+local Aetherius = {}
 
 do
-	local LocalPlayer = Players.LocalPlayer
+	local RunService = game:GetService("RunService")
+	local Players = game:GetService("Players")
+	local Workspace = game:GetService("Workspace")
+	local ReplicatedStorage = game:GetService("ReplicatedStorage")
+	local CollectionService = game:GetService("CollectionService")
+	local Stats = game:GetService("Stats")
+	local Lighting = game:GetService("Lighting")
+	local ContentProvider = game:GetService("ContentProvider")
+	local UserSettings = UserSettings()
+	local GameSettings = UserSettings:GetService("UserGameSettings")
+
 	local Camera = Workspace.CurrentCamera
+	local os_clock, table_insert, table_remove, math_floor, math_huge, math_exp, math_min, math_max, ipairs, pcall, task_spawn, task_wait, coroutine_create, coroutine_resume, coroutine_yield = os.clock, table.insert, table.remove, math.floor, math.huge, math.exp, math.min, math.max, ipairs, pcall, task.spawn, task.wait, coroutine.create, coroutine.resume, coroutine.yield
 
-	local os_clock = os.clock
-	local table_insert = table.insert
-	local table_remove = table.remove
-	local math_floor = math.floor
-	local math_huge = math.huge
-	local math_exp = math.exp
-	local math_min = math.min
-	local math_max = math.max
-	local ipairs = ipairs
-	local pcall = pcall
-	local task_spawn = task.spawn
-	local task_wait = task.wait
-
-	Maestro.Orchestrator = {
-		PROFILES = {
-			Potato = { fps = 20, physicsFps = 20, memory = 200 },
-			Low = { fps = 30, physicsFps = 28, memory = 400 },
-			Medium = { fps = 55, physicsFps = 50, memory = 800 },
-			High = { fps = 100, physicsFps = 58, memory = 1500 },
-		},
-		_aggression = { render = 1, physics = 1, effects = 1, core = 1 },
-		_fpsHistory = {},
-		_totalDeltaTime = 0,
-		_historyIndex = 1,
-		_lastCheck = 0,
-		_potatoModeActive = false,
+	Aetherius.Orchestrator = {
+		PROFILES = {[1]={f=120,p=60,m=2000},[2]={f=60,p=55,m=1200},[3]={f=40,p=35,m=800},[4]={f=25,p=20,m=400}},
+		_aggression = {render=1,physics=1,effects=1,core=1,resource=1},
+		_fpsHistory = {}, _totalDeltaTime = 0, _historyIndex = 1, _lastCheck = 0,
+		_isCalibrated = false, _emergencyState = false, _avgDelta = 1/60,
 	}
-
-	function Maestro.Orchestrator:GetAverageFPS()
-		local count = #self._fpsHistory
-		return if count > 0 then count / self._totalDeltaTime else 60
+	function Aetherius.Orchestrator:GetAverageFPS() local c=#self._fpsHistory; return if c>0 then c/self._totalDeltaTime else 120 end
+	function Aetherius.Orchestrator:EnterEmergencyState() if self._emergencyState then return end; self._emergencyState=true; for k,_ in pairs(self._aggression) do self._aggression[k]=4 end; task.delay(2,function() self._emergencyState=false end) end
+	function Aetherius.Orchestrator:AnalyzeAndAdjust()
+		if not self._isCalibrated or self._emergencyState then return end
+		local avgFps,realPhysicsFps,mem = self:GetAverageFPS(),Workspace:GetRealPhysicsFPS(),Stats.Total.Value
+		local prof=self.PROFILES[4]; if avgFps>self.PROFILES[2].f then prof=self.PROFILES[1] elseif avgFps>self.PROFILES[3].f then prof=self.PROFILES[2] else prof=self.PROFILES[3] end
+		local rs,ps,ms=avgFps/prof.f,realPhysicsFps/prof.p,prof.m/mem
+		local nr,np,ne,nc,nres = if rs<0.9 then rs<0.7 and 3 or 2 else 1, if ps<0.9 then ps<0.7 and 4 or 3 else 1, if rs<1 or ms<1 then rs<0.8 or ms<0.8 and 4 or 3 else 1, prof==self.PROFILES[4] and 3 or prof==self.PROFILES[3] and 2 or 1, if ms<0.8 then 3 else 1
+		local a=1-math_exp(-0.5*2); self._aggression.render=self._aggression.render+(nr-self._aggression.render)*a; self._aggression.physics=self._aggression.physics+(np-self._aggression.physics)*a; self._aggression.effects=self._aggression.effects+(ne-self._aggression.effects)*a; self._aggression.core=self._aggression.core+(nc-self._aggression.core)*a; self._aggression.resource=self._aggression.resource+(nres-self._aggression.resource)*a
+		if nc>=3 and not self._potatoModeActive then self._potatoModeActive=true;Aetherius.CoreOptimizer:SetQualityLevel(1) elseif nc<2 and self._potatoModeActive then self._potatoModeActive=false;Aetherius.CoreOptimizer:RestoreQuality() end
+	end
+	function Aetherius.Orchestrator:Update(dt)
+		if dt>self._avgDelta*3.5 and self._isCalibrated then self:EnterEmergencyState() end; self._avgDelta=self._avgDelta+(dt-self._avgDelta)*0.1
+		local h,hs=#self._fpsHistory,60; if h<hs then table_insert(self._fpsHistory,dt);self._totalDeltaTime+=dt else self._totalDeltaTime=self._totalDeltaTime-self._fpsHistory[self._historyIndex]+dt;self._fpsHistory[self._historyIndex]=dt;self._historyIndex=(self._historyIndex%hs)+1 end
+		local n=os_clock(); if n-self._lastCheck>0.5 then self:AnalyzeAndAdjust(); self._lastCheck=n end
 	end
 
-	function Maestro.Orchestrator:AnalyzeAndAdjust(dt)
-		local avgFps = self:GetAverageFPS()
-		local realPhysicsFps = Workspace:GetRealPhysicsFPS()
-		local memory = Stats.Total.Value
+	Aetherius.Calibrator = {}
+	function Aetherius.Calibrator:Run() task.wait(2); local d=10;local s,e={},os_clock();while os_clock()-e<d do table_insert(s,1/RunService.Heartbeat:Wait()) end; local function g(t) local n=0; for _,v in ipairs(t) do n+=v end;return n/#t end; local af=g(s);local o=Aetherius.Orchestrator;o.PROFILES[1].f=math_max(60,af*0.9);o.PROFILES[2].f=math_max(45,af*0.7);o.PROFILES[3].f=math_max(30,af*0.5);o._isCalibrated=true; end
 
-		local profile = self.PROFILES.Potato
-		if avgFps > self.PROFILES.Medium.fps and realPhysicsFps > self.PROFILES.Medium.physicsFps then
-			profile = self.PROFILES.High
-		elseif avgFps > self.PROFILES.Low.fps and realPhysicsFps > self.PROFILES.Low.physicsFps then
-			profile = self.PROFILES.Medium
-		elseif avgFps > self.PROFILES.Potato.fps and realPhysicsFps > self.PROFILES.Potato.physicsFps then
-			profile = self.PROFILES.Low
-		end
+	Aetherius.Scheduler = { _tasks={} }
+	function Aetherius.Scheduler:AddTask(task) local co=coroutine_create(function() while true do pcall(task.fn); local a=Aetherius.Orchestrator._aggression[task.category] or 1; task_wait(task.baseInterval*a) end end); table_insert(self._tasks,co) end
+	function Aetherius.Scheduler:Run() for _, co in ipairs(self._tasks) do coroutine_resume(co) end end
 
-		local renderScore = avgFps / profile.fps
-		local physicsScore = realPhysicsFps / profile.physicsFps
-		local memoryScore = profile.memory / memory
+	Aetherius.SpatialGrid = { GRID_SIZE=250,_grid={},_tracked=setmetatable({},{__mode="k"})}
+	function Aetherius.SpatialGrid:GetCell(p) local s=self.GRID_SIZE;return math_floor(p.X/s)..","..math_floor(p.Y/s)..","..math_floor(p.Z/s) end
+	function Aetherius.SpatialGrid:Register(o,d) local c=self:GetCell(o.Position);self._grid[c]=self._grid[c] or {};table_insert(self._grid[c],o);self._tracked[o]={cell=c,data=d} end
+	function Aetherius.SpatialGrid:GetNearby(p,r) local res,s,cr={},self.GRID_SIZE,math_floor(r/s)+1;local cx,cy,cz=math_floor(p.X/s),math_floor(p.Y/s),math_floor(p.Z/s);for i=cx-cr,cx+cr do for j=cy-cr,cy+cr do for k=cz-cr,cz+cr do local cell=self._grid[i..","..j..","..k];if cell then for _,o in ipairs(cell) do table_insert(res,o) end end end end end; return res end
 
-		local newRenderAggression = if renderScore < 0.95 then (if renderScore < 0.75 then 3 else 2) else 1
-		local newPhysicsAggression = if physicsScore < 0.95 then (if physicsScore < 0.75 then 4 else 3) else 1
-		local newEffectAggression = if memoryScore < 1 or renderScore < 1 then (if memoryScore < 0.8 or renderScore < 0.8 then 4 else 3) else 1
-		local newCoreAggression = if profile == self.PROFILES.Potato then 3 elseif profile == self.PROFILES.Low then 2 else 1
-
-		local alpha = 1 - math_exp(-dt * 2)
-		self._aggression.render = self._aggression.render + (newRenderAggression - self._aggression.render) * alpha
-		self._aggression.physics = self._aggression.physics + (newPhysicsAggression - self._aggression.physics) * alpha
-		self._aggression.effects = self._aggression.effects + (newEffectAggression - self._aggression.effects) * alpha
-		self._aggression.core = self._aggression.core + (newCoreAggression - self._aggression.core) * alpha
-
-		if newCoreAggression >= 3 and not self._potatoModeActive then
-			self._potatoModeActive = true
-			Maestro.CoreOptimizer:ActivatePotatoMode()
-		elseif newCoreAggression < 2 and self._potatoModeActive then
-			self._potatoModeActive = false
-			Maestro.CoreOptimizer:DeactivatePotatoMode()
-		end
-	end
-
-	function Maestro.Orchestrator:Update(dt)
-		local history = self._fpsHistory
-		local historySize = 60
-		if #history < historySize then
-			table_insert(history, dt)
-			self._totalDeltaTime += dt
-		else
-			local oldDelta = history[self._historyIndex]
-			self._totalDeltaTime = self._totalDeltaTime - oldDelta + dt
-			history[self._historyIndex] = dt
-			self._historyIndex = (self._historyIndex % historySize) + 1
-		end
-
-		local now = os_clock()
-		if now - self._lastCheck > 0.5 then
-			self:AnalyzeAndAdjust(now - self._lastCheck)
-			self._lastCheck = now
+	Aetherius.LODSystem = { DISTANCES_SQR={[1]={120^2,300^2,600^2},[2]={80^2,200^2,450^2},[3]={50^2,150^2,300^2}}, CULL_DELAY=5, _culled={} }
+	function Aetherius.LODSystem:Register(m) if not m.PrimaryPart then return end; local p={};for _,d in ipairs(m:GetDescendants())do if d:IsA("BasePart")or d:IsA("Decal")then table_insert(p,d)end end;Aetherius.SpatialGrid:Register(m.PrimaryPart,{LOD={parts=p,lastFidelity=-1,lastTrans=-1,lastVisible=os_clock(),isCulled=false}}) end
+	function Aetherius.LODSystem:Update(cam)
+		local a=math_floor(Aetherius.Orchestrator._aggression.render+0.5);a=math_max(1,math_min(3,a));local levels=self.DISTANCES_SQR[a]
+		local nearby=Aetherius.SpatialGrid:GetNearby(cam.Position,600)
+		for _,part in ipairs(nearby) do
+			local tracked=Aetherius.SpatialGrid._tracked[part]
+			if not(part and part.Parent and tracked and tracked.data.LOD)or tracked.data.LOD.isCulled then continue end
+			local _,inView=Camera:WorldToViewportPoint(part.Position); local entry,distSqr=tracked.data.LOD,(part.Position-cam.Position).MagnitudeSqr
+			if inView then entry.lastVisible=os_clock() end
+			local newTrans,newFid; if distSqr<levels[1] then newTrans,newFid=0,Enum.RenderFidelity.Precise elseif distSqr<levels[2] then newTrans,newFid=0.75,Enum.RenderFidelity.Automatic else newTrans,newFid=1,Enum.RenderFidelity.Performance end
+			if entry.lastTrans~=newTrans then for _,p in ipairs(entry.parts)do if p:IsA("BasePart")then p.Transparency=newTrans end end;entry.lastTrans=newTrans end
+			if entry.lastFidelity~=newFid then for _,p in ipairs(entry.parts)do if p:IsA("BasePart")then p.RenderFidelity=newFid end end;entry.lastFidelity=newFid end
+			if distSqr>levels[3] and os_clock()-entry.lastVisible>self.CULL_DELAY and CollectionService:HasTag(part.Parent,"Cosmetic") then entry.isCulled=true;part.Parent.Parent=nil;table_insert(self._culled,{obj=part.Parent,pos=part.Position}) end
 		end
 	end
+	function Aetherius.LODSystem:CheckCulled(camPos) for i=#self._culled,1,-1 do local c=self._culled[i];if(c.pos-camPos).Magnitude<500 then local tracked=Aetherius.SpatialGrid._tracked[c.obj.PrimaryPart];if tracked then tracked.data.LOD.isCulled=false;tracked.data.LOD.lastVisible=os_clock()end;c.obj.Parent=Workspace;table_remove(self._culled,i)end end end
 
-	Maestro.Scheduler = {
-		_heap = {},
-		_taskCount = 0,
-	}
-	
-	function Maestro.Scheduler:_heapSwap(i, j)
-		local heap = self._heap
-		heap[i], heap[j] = heap[j], heap[i]
-	end
-
-	function Maestro.Scheduler:_heapBubbleUp(i)
-		local heap = self._heap
-		while i > 1 do
-			local p = math_floor(i / 2)
-			if heap[p].nextRun <= heap[i].nextRun then break end
-			self:_heapSwap(i, p)
-			i = p
-		end
-	end
-
-	function Maestro.Scheduler:_heapBubbleDown(i)
-		local heap = self._heap
-		local size = self._taskCount
-		while 2 * i <= size do
-			local l = 2 * i
-			local r = 2 * i + 1
-			local smallest = i
-			if l <= size and heap[l].nextRun < heap[smallest].nextRun then
-				smallest = l
-			end
-			if r <= size and heap[r].nextRun < heap[smallest].nextRun then
-				smallest = r
-			end
-			if smallest == i then break end
-			self:_heapSwap(i, smallest)
-			i = smallest
-		end
-	end
-
-	function Maestro.Scheduler:AddTask(name, fn, baseInterval, category)
-		self._taskCount += 1
-		local task = {
-			name = name,
-			fn = fn,
-			baseInterval = baseInterval,
-			category = category or "render",
-			nextRun = os_clock() + baseInterval,
-		}
-		self._heap[self._taskCount] = task
-		self:_heapBubbleUp(self._taskCount)
-	end
-
-	function Maestro.Scheduler:Run()
-		local now = os_clock()
-		local aggression = Maestro.Orchestrator._aggression
-		
-		while self._taskCount > 0 and self._heap[1].nextRun <= now do
-			local task = self._heap[1]
-			
-			local success, err = pcall(task.fn)
-			
-			local intervalMultiplier = aggression[task.category] or 1
-			task.nextRun = now + (task.baseInterval * intervalMultiplier)
-			
-			self:_heapBubbleDown(1)
-		end
-	end
-
-	Maestro.SpatialGrid = {
-		GRID_SIZE = 200,
-		_grid = {},
-		_trackedObjects = setmetatable({}, {__mode = "k"}),
-	}
-	
-	function Maestro.SpatialGrid:GetCell(position)
-		local grid_size = self.GRID_SIZE
-		local x = math_floor(position.X / grid_size)
-		local z = math_floor(position.Z / grid_size)
-		return x .. "," .. z
-	end
-
-	function Maestro.SpatialGrid:Register(obj, data)
-		local cellId = self:GetCell(obj.Position)
-		self._grid[cellId] = self._grid[cellId] or {}
-		table_insert(self._grid[cellId], obj)
-		self._trackedObjects[obj] = { cell = cellId, data = data }
-	end
-
-	function Maestro.SpatialGrid:UpdateObjectPosition(obj)
-		local tracked = self._trackedObjects[obj]
-		if not tracked then return end
-		
-		local newCellId = self:GetCell(obj.Position)
-		if tracked.cell ~= newCellId then
-			local oldCell = self._grid[tracked.cell]
-			if oldCell then
-				for i, v in ipairs(oldCell) do
-					if v == obj then
-						table_remove(oldCell, i)
-						break
-					end
-				end
-			end
-			self._grid[newCellId] = self._grid[newCellId] or {}
-			table_insert(self._grid[newCellId], obj)
-			tracked.cell = newCellId
+	Aetherius.PhysicsGovernor = { DISTANCES_SQR={[1]=math_huge,[2]=250^2,[3]=150^2,[4]=80^2},SLEEP_VEL=0.4 }
+	function Aetherius.PhysicsGovernor:Register(m) if not m.PrimaryPart then return end;local p={};for _,d in ipairs(m:GetDescendants())do if d:IsA("BasePart")and not d.Anchored then table_insert(p,d)end end;if #p>0 then Aetherius.SpatialGrid:Register(m.PrimaryPart,{Physics={parts=p}})end end
+	function Aetherius.PhysicsGovernor:Update(camPos)
+		local a=math_floor(Aetherius.Orchestrator._aggression.physics+0.5);a=math_max(1,math_min(4,a));local distSqr=self.DISTANCES_SQR[a]
+		local nearby=Aetherius.SpatialGrid:GetNearby(camPos,500)
+		for _,pPart in ipairs(nearby) do
+			local tracked=Aetherius.SpatialGrid._tracked[pPart]
+			if not(pPart and pPart.Parent and tracked and tracked.data.Physics)then continue end
+			local shouldAnchor=(pPart.Position-camPos).MagnitudeSqr>distSqr or pPart.AssemblyLinearVelocity.Magnitude<self.SLEEP_VEL
+			for _,part in ipairs(tracked.data.Physics)do if part and part.Anchored~=shouldAnchor then part.Anchored=shouldAnchor end end
 		end
 	end
 	
-	function Maestro.SpatialGrid:GetNearbyObjects(position, radius)
-		local results = {}
-		local grid_size = self.GRID_SIZE
-		local cellX = math_floor(position.X / grid_size)
-		local cellZ = math_floor(position.Z / grid_size)
-		local cellRadius = math_floor(radius / grid_size) + 1
-
-		for i = cellX - cellRadius, cellX + cellRadius do
-			for j = cellZ - cellRadius, cellZ + cellRadius do
-				local cell = self._grid[i .. "," .. j]
-				if cell then
-					for _, obj in ipairs(cell) do
-						table_insert(results, obj)
-					end
-				end
-			end
-		end
-		return results
-	end
-
-	Maestro.EffectSystem = {
-		_active = {},
-		_inactive = {},
-		_templates = {},
-		_objectToTemplate = setmetatable({}, {__mode = "k"}),
-		_objectToIndex = setmetatable({}, {__mode = "k"}),
-		ALLOWANCE = {[1]=1, [2]=0.8, [3]=0.4, [4]=0.1},
-		MAX_EFFECTS = {[1]=100, [2]=50, [3]=20, [4]=5},
-	}
-
-	function Maestro.EffectSystem:Preload(templateName, count)
-		local template = ReplicatedStorage.Assets:FindFirstChild(templateName)
-		if not template then return end
-		self._templates[templateName] = template
-		self._inactive[templateName] = {}
-		for _ = 1, count do
-			local obj = template:Clone()
-			obj.Parent = nil
-			table_insert(self._inactive[templateName], obj)
-		end
+	Aetherius.ResourceSentinel = { _assets={}, UNLOAD_TIME=120 }
+	function Aetherius.ResourceSentinel:Track(assetId) self._assets[assetId]=os_clock() end
+	function Aetherius.ResourceSentinel:Cleanup()
+		local toUnload,now={},os_clock()
+		for id,lastUsed in pairs(self._assets) do if now-lastUsed>self.UNLOAD_TIME*Aetherius.Orchestrator._aggression.resource then table_insert(toUnload,id);self._assets[id]=nil end end
+		if #toUnload>0 then ContentProvider:UnloadAssets(toUnload) end
 	end
 	
-	function Maestro.EffectSystem:Get(templateName)
-		local aggression = math_floor(Maestro.Orchestrator._aggression.effects + 0.5)
-		local activePool = self._active[templateName] or {}
-		
-		if #activePool >= self.MAX_EFFECTS[aggression] or math.random() > self.ALLOWANCE[aggression] then
-			return nil
-		end
-		self._active[templateName] = activePool
+	Aetherius.CoreOptimizer = {}
+	function Aetherius.CoreOptimizer:SetQualityLevel(l) GameSettings.SavedQualityLevel=Enum.SavedQualitySetting["QualityLevel"..l];Lighting.Technology=Enum.Technology.Compatibility;Lighting.Shadows=false; end
+	function Aetherius.CoreOptimizer:RestoreQuality() GameSettings.SavedQualityLevel=Enum.SavedQualitySetting.Automatic;Lighting.Technology=Enum.Technology.ShadowMap;Lighting.Shadows=true; end
 
-		local inactivePool = self._inactive[templateName] or {}
-		self._inactive[templateName] = inactivePool
-		local obj = if #inactivePool > 0 then table_remove(inactivePool) else self._templates[templateName]:Clone()
-		
-		table_insert(activePool, obj)
-		self._objectToTemplate[obj] = templateName
-		self._objectToIndex[obj] = #activePool
-		
-		return obj
-	end
+	function Aetherius:Activate()
+		task_spawn(self.Calibrator.Run)
+		local function process(instances) for _,inst in ipairs(instances)do if not inst or not inst.PrimaryPart then continue end;if CollectionService:HasTag(inst,"ManagedRender")then self.LODSystem:Register(inst)end;if CollectionService:HasTag(inst,"ManagedPhysics")then self.PhysicsGovernor:Register(inst)end;task_wait()end end
+		local initialBatch={};for _,t in ipairs({"ManagedRender","ManagedPhysics"})do for _,m in ipairs(CollectionService:GetTagged(t))do table_insert(initialBatch,m)end end;task_spawn(process,initialBatch)
+		for _,t in ipairs({"ManagedRender","ManagedPhysics"})do CollectionService:GetInstanceAddedSignal(t):Connect(function(m) if t=="ManagedRender"then self.LODSystem:Register(m)else self.PhysicsGovernor:Register(m)end end)end
+		local function trackSound(s) if s.SoundId~="" then self.ResourceSentinel:Track(s.SoundId) end; s.Played:Connect(function() self.ResourceSentinel:Track(s.SoundId) end) end
+		local function trackImage(i) if i.Image~="" then self.ResourceSentinel:Track(i.Image) end; i:GetPropertyChangedSignal("Image"):Connect(function() self.ResourceSentinel:Track(i.Image) end) end
+		Workspace.DescendantAdded:Connect(function(d) if d:IsA("Sound") then trackSound(d) elseif d:IsA("ImageLabel") or d:IsA("ImageButton") or d:IsA("Texture") then trackImage(d) end end)
 
-	function Maestro.EffectSystem:Return(obj)
-		if not obj or not obj.Parent then return end
-		local templateName = self._objectToTemplate[obj]
-		if not templateName then return obj:Destroy() end
-		
-		obj.Parent = nil
-		
-		local activePool = self._active[templateName]
-		local index = self._objectToIndex[obj]
-		if not (activePool and index and activePool[index] == obj) then return obj:Destroy() end
-
-		local lastObj = table_remove(activePool)
-		if lastObj ~= obj then
-			activePool[index] = lastObj
-			self._objectToIndex[lastObj] = index
-		end
-		self._objectToIndex[obj] = nil
-
-		table_insert(self._inactive[templateName], obj)
-	end
-	
-	Maestro.LODSystem = {
-		DISTANCES = {
-			[1] = {100, 200, 400},
-			[2] = {60, 140, 300},
-			[3] = {40, 90, 180},
-		},
-	}
-
-	function Maestro.LODSystem:Register(model, tag)
-		if not (model:IsA("Model") and model.PrimaryPart) then return end
-		local partsToUpdate = {}
-		for _, descendant in ipairs(model:GetDescendants()) do
-			if descendant:IsA("BasePart") then
-				table_insert(partsToUpdate, descendant)
-			end
-		end
-
-		local entryData = {
-			tag = tag,
-			parts = partsToUpdate,
-			lastFidelity = -1,
-			lastTransparency = -1,
-		}
-		Maestro.SpatialGrid:Register(model.PrimaryPart, {LOD = entryData})
-	end
-
-	function Maestro.LODSystem:Update(cameraPos)
-		local aggression = math_floor(Maestro.Orchestrator._aggression.render + 0.5)
-		aggression = math_max(1, math_min(3, aggression))
-		local levels = self.DISTANCES[aggression]
-		local levelsSqr = {levels[1]^2, levels[2]^2, levels[3]^2}
-		
-		local nearbyObjects = Maestro.SpatialGrid:GetNearbyObjects(cameraPos, levels[3] + 100)
-
-		for _, part in ipairs(nearbyObjects) do
-			local trackedData = Maestro.SpatialGrid._trackedObjects[part]
-			if not (part and part.Parent and trackedData and trackedData.data.LOD) then continue end
-
-			local entry = trackedData.data.LOD
-			local distanceSqr = (part.Position - cameraPos).MagnitudeSqr
-			local newTransparency, newFidelity
-
-			if distanceSqr < levelsSqr[1] then
-				newTransparency = 0; newFidelity = Enum.RenderFidelity.Precise
-			elseif distanceSqr < levelsSqr[2] then
-				newTransparency = 0.6; newFidelity = Enum.RenderFidelity.Automatic
-			else
-				newTransparency = 1; newFidelity = Enum.RenderFidelity.Performance
-			end
-			
-			if entry.lastTransparency ~= newTransparency then
-				for _, p in ipairs(entry.parts) do
-					if p.Transparency ~= newTransparency then p.Transparency = newTransparency end
-				end
-				entry.lastTransparency = newTransparency
-			end
-			
-			if entry.lastFidelity ~= newFidelity then
-				for _, p in ipairs(entry.parts) do
-					if p.RenderFidelity ~= newFidelity then p.RenderFidelity = newFidelity end
-				end
-				entry.lastFidelity = newFidelity
-			end
-		end
-	end
-	
-	Maestro.PhysicsGovernor = {
-		DISTANCES_SQR = {[1] = math_huge, [2] = 200^2, [3] = 100^2, [4] = 50^2}
-	}
-
-	function Maestro.PhysicsGovernor:Register(model)
-		if not model.PrimaryPart then return end
-		local parts = {}
-		for _, part in ipairs(model:GetDescendants()) do
-			if part:IsA("BasePart") and not part.Anchored then
-				table_insert(parts, part)
-			end
-		end
-		if #parts > 0 then
-			Maestro.SpatialGrid:Register(model.PrimaryPart, {Physics = parts})
-		end
-	end
-	
-	function Maestro.PhysicsGovernor:Update(cameraPos)
-		local aggression = math_floor(Maestro.Orchestrator._aggression.physics + 0.5)
-		aggression = math_max(1, math_min(4, aggression))
-		local physicsDistanceSqr = self.DISTANCES_SQR[aggression]
-		
-		local nearbyObjects = Maestro.SpatialGrid:GetNearbyObjects(cameraPos, 500)
-
-		for _, pPart in ipairs(nearbyObjects) do
-			local trackedData = Maestro.SpatialGrid._trackedObjects[pPart]
-			if not (pPart and pPart.Parent and trackedData and trackedData.data.Physics) then continue end
-			
-			local parts = trackedData.data.Physics
-			local shouldBeAnchored = (pPart.Position - cameraPos).MagnitudeSqr > physicsDistanceSqr
-			for _, part in ipairs(parts) do
-				if part and part.Anchored ~= shouldBeAnchored then
-					part.Anchored = shouldBeAnchored
-				end
-			end
-		end
-	end
-
-	Maestro.DebrisManager = {
-		_debris = {},
-		MAX_DEBRIS = 50,
-	}
-
-	function Maestro.DebrisManager:Track(instance)
-		if #self._debris >= self.MAX_DEBRIS then
-			local oldest = table_remove(self._debris, 1)
-			if oldest then oldest:Destroy() end
-		end
-		table_insert(self._debris, instance)
-	end
-	
-	function Maestro.DebrisManager:Cleanup()
-		local amountToClean = math_floor(#self._debris * 0.1) + 1
-		for i = 1, amountToClean do
-			local obj = table_remove(self._debris, 1)
-			if obj then obj:Destroy() else break end
-		end
-	end
-	
-	Maestro.CoreOptimizer = {
-		_originalQuality = GameSettings.SavedQualityLevel,
-		_originalTechnology = Lighting.Technology,
-	}
-
-	function Maestro.CoreOptimizer:ActivatePotatoMode()
-		GameSettings.SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel1
-		Lighting.Technology = Enum.Technology.Compatibility
-		Lighting.Shadows = false
-		Lighting.GlobalShadows = false
-	end
-
-	function Maestro.CoreOptimizer:DeactivatePotatoMode()
-		GameSettings.SavedQualityLevel = self._originalQuality
-		Lighting.Technology = self._originalTechnology
-		Lighting.Shadows = true
-		Lighting.GlobalShadows = true
-	end
-
-	function Maestro:Initialize()
-		self.EffectSystem:Preload("ExplosionEffect", 20)
-		self.EffectSystem:Preload("MuzzleFlash", 15)
-
-		local function setupModel(model)
-			if CollectionService:HasTag(model, "ManagedRender") then
-				self.LODSystem:Register(model, "ManagedRender")
-			end
-			if CollectionService:HasTag(model, "ManagedPhysics") then
-				self.PhysicsGovernor:Register(model, "ManagedPhysics")
-			end
-		end
-
-		for _, tag in ipairs({"ManagedRender", "ManagedPhysics"}) do
-			for _, model in ipairs(CollectionService:GetTagged(tag)) do
-				task_spawn(setupModel, model)
-			end
-			CollectionService:GetInstanceAddedSignal(tag):Connect(setupModel)
-		end
-		
-		CollectionService:GetInstanceAddedSignal("Debris"):Connect(function(instance)
-			self.DebrisManager:Track(instance)
-		end)
-
-		self.Scheduler:AddTask("LOD", function() self.LODSystem:Update(Camera.CFrame.Position) end, 0.1, "render")
-		self.Scheduler:AddTask("Physics", function() self.PhysicsGovernor:Update(Camera.CFrame.Position) end, 0.25, "physics")
-		self.Scheduler:AddTask("Debris", function() self.DebrisManager:Cleanup() end, 2, "effects")
-
-		RunService.Heartbeat:Connect(function(dt)
-			self.Orchestrator:Update(dt)
-			self.Scheduler:Run()
-		end)
+		self.Scheduler:AddTask({name="Orchestrator",fn=function()self.Orchestrator:Update(RunService.Heartbeat:Wait())end,baseInterval=0,category="core"})
+		self.Scheduler:AddTask({name="LOD",fn=function()self.LODSystem:Update(Camera.CFrame)end,baseInterval=0.1,category="render"})
+		self.Scheduler:AddTask({name="Physics",fn=function()self.PhysicsGovernor:Update(Camera.CFrame.Position)end,baseInterval=0.2,category="physics"})
+		self.Scheduler:AddTask({name="CulledCheck",fn=function()self.LODSystem:CheckCulled(Camera.CFrame.Position)end,baseInterval=1,category="render"})
+		self.Scheduler:AddTask({name="Resources",fn=function()self.ResourceSentinel:Cleanup()end,baseInterval=15,category="resource"})
+		self.Scheduler:Run()
 	end
 end
 
-pcall(Maestro.Initialize, Maestro)
+Aetherius:Activate()
