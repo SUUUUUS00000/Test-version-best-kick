@@ -2,336 +2,478 @@ local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
+local Stats = game:GetService("Stats")
+local Lighting = game:GetService("Lighting")
+local UserSettings = UserSettings()
+local GameSettings = UserSettings:GetService("UserGameSettings")
 
-local LocalPlayer = Players.LocalPlayer
-local Camera = Workspace.CurrentCamera
+local Maestro = {}
 
-local os_clock = os.clock
-local table_insert = table.insert
-local table_remove = table.remove
-local math_floor = math.floor
-local ipairs = ipairs
-local Vector3_new = Vector3.new
+do
+	local LocalPlayer = Players.LocalPlayer
+	local Camera = Workspace.CurrentCamera
 
-local PerformanceGovernor = {}
-PerformanceGovernor.PROFILES = {
-    Low = {
-        label = "Low",
-        fpsThreshold = 25,
-        lodDistances = {40, 80, 150},
-        maxTasksPerFrame = 3,
-        particleAllowance = 0.3,
-        maxActiveEffects = 15,
-    },
-    Medium = {
-        label = "Medium",
-        fpsThreshold = 45,
-        lodDistances = {70, 150, 250},
-        maxTasksPerFrame = 5,
-        particleAllowance = 0.7,
-        maxActiveEffects = 40,
-    },
-    High = {
-        label = "High",
-        fpsThreshold = 999,
-        lodDistances = {90, 180, 350},
-        maxTasksPerFrame = 8,
-        particleAllowance = 1.0,
-        maxActiveEffects = 80,
-    },
-}
-PerformanceGovernor._currentProfile = PerformanceGovernor.PROFILES.High
-PerformanceGovernor._fpsHistory = {}
-PerformanceGovernor._lastCheck = 0
-PerformanceGovernor._totalDeltaTime = 0
-PerformanceGovernor._historyIndex = 1
+	local os_clock = os.clock
+	local table_insert = table.insert
+	local table_remove = table.remove
+	local math_floor = math.floor
+	local math_huge = math.huge
+	local math_exp = math.exp
+	local math_min = math.min
+	local math_max = math.max
+	local ipairs = ipairs
+	local pcall = pcall
+	local task_spawn = task.spawn
+	local task_wait = task.wait
 
-function PerformanceGovernor:GetAverageFPS()
-    local count = #self._fpsHistory
-    if count == 0 then return 60 end
-    return count / self._totalDeltaTime
+	Maestro.Orchestrator = {
+		PROFILES = {
+			Potato = { fps = 20, physicsFps = 20, memory = 200 },
+			Low = { fps = 30, physicsFps = 28, memory = 400 },
+			Medium = { fps = 55, physicsFps = 50, memory = 800 },
+			High = { fps = 100, physicsFps = 58, memory = 1500 },
+		},
+		_aggression = { render = 1, physics = 1, effects = 1, core = 1 },
+		_fpsHistory = {},
+		_totalDeltaTime = 0,
+		_historyIndex = 1,
+		_lastCheck = 0,
+		_potatoModeActive = false,
+	}
+
+	function Maestro.Orchestrator:GetAverageFPS()
+		local count = #self._fpsHistory
+		return if count > 0 then count / self._totalDeltaTime else 60
+	end
+
+	function Maestro.Orchestrator:AnalyzeAndAdjust(dt)
+		local avgFps = self:GetAverageFPS()
+		local realPhysicsFps = Workspace:GetRealPhysicsFPS()
+		local memory = Stats.Total.Value
+
+		local profile = self.PROFILES.Potato
+		if avgFps > self.PROFILES.Medium.fps and realPhysicsFps > self.PROFILES.Medium.physicsFps then
+			profile = self.PROFILES.High
+		elseif avgFps > self.PROFILES.Low.fps and realPhysicsFps > self.PROFILES.Low.physicsFps then
+			profile = self.PROFILES.Medium
+		elseif avgFps > self.PROFILES.Potato.fps and realPhysicsFps > self.PROFILES.Potato.physicsFps then
+			profile = self.PROFILES.Low
+		end
+
+		local renderScore = avgFps / profile.fps
+		local physicsScore = realPhysicsFps / profile.physicsFps
+		local memoryScore = profile.memory / memory
+
+		local newRenderAggression = if renderScore < 0.95 then (if renderScore < 0.75 then 3 else 2) else 1
+		local newPhysicsAggression = if physicsScore < 0.95 then (if physicsScore < 0.75 then 4 else 3) else 1
+		local newEffectAggression = if memoryScore < 1 or renderScore < 1 then (if memoryScore < 0.8 or renderScore < 0.8 then 4 else 3) else 1
+		local newCoreAggression = if profile == self.PROFILES.Potato then 3 elseif profile == self.PROFILES.Low then 2 else 1
+
+		local alpha = 1 - math_exp(-dt * 2)
+		self._aggression.render = self._aggression.render + (newRenderAggression - self._aggression.render) * alpha
+		self._aggression.physics = self._aggression.physics + (newPhysicsAggression - self._aggression.physics) * alpha
+		self._aggression.effects = self._aggression.effects + (newEffectAggression - self._aggression.effects) * alpha
+		self._aggression.core = self._aggression.core + (newCoreAggression - self._aggression.core) * alpha
+
+		if newCoreAggression >= 3 and not self._potatoModeActive then
+			self._potatoModeActive = true
+			Maestro.CoreOptimizer:ActivatePotatoMode()
+		elseif newCoreAggression < 2 and self._potatoModeActive then
+			self._potatoModeActive = false
+			Maestro.CoreOptimizer:DeactivatePotatoMode()
+		end
+	end
+
+	function Maestro.Orchestrator:Update(dt)
+		local history = self._fpsHistory
+		local historySize = 60
+		if #history < historySize then
+			table_insert(history, dt)
+			self._totalDeltaTime += dt
+		else
+			local oldDelta = history[self._historyIndex]
+			self._totalDeltaTime = self._totalDeltaTime - oldDelta + dt
+			history[self._historyIndex] = dt
+			self._historyIndex = (self._historyIndex % historySize) + 1
+		end
+
+		local now = os_clock()
+		if now - self._lastCheck > 0.5 then
+			self:AnalyzeAndAdjust(now - self._lastCheck)
+			self._lastCheck = now
+		end
+	end
+
+	Maestro.Scheduler = {
+		_heap = {},
+		_taskCount = 0,
+	}
+	
+	function Maestro.Scheduler:_heapSwap(i, j)
+		local heap = self._heap
+		heap[i], heap[j] = heap[j], heap[i]
+	end
+
+	function Maestro.Scheduler:_heapBubbleUp(i)
+		local heap = self._heap
+		while i > 1 do
+			local p = math_floor(i / 2)
+			if heap[p].nextRun <= heap[i].nextRun then break end
+			self:_heapSwap(i, p)
+			i = p
+		end
+	end
+
+	function Maestro.Scheduler:_heapBubbleDown(i)
+		local heap = self._heap
+		local size = self._taskCount
+		while 2 * i <= size do
+			local l = 2 * i
+			local r = 2 * i + 1
+			local smallest = i
+			if l <= size and heap[l].nextRun < heap[smallest].nextRun then
+				smallest = l
+			end
+			if r <= size and heap[r].nextRun < heap[smallest].nextRun then
+				smallest = r
+			end
+			if smallest == i then break end
+			self:_heapSwap(i, smallest)
+			i = smallest
+		end
+	end
+
+	function Maestro.Scheduler:AddTask(name, fn, baseInterval, category)
+		self._taskCount += 1
+		local task = {
+			name = name,
+			fn = fn,
+			baseInterval = baseInterval,
+			category = category or "render",
+			nextRun = os_clock() + baseInterval,
+		}
+		self._heap[self._taskCount] = task
+		self:_heapBubbleUp(self._taskCount)
+	end
+
+	function Maestro.Scheduler:Run()
+		local now = os_clock()
+		local aggression = Maestro.Orchestrator._aggression
+		
+		while self._taskCount > 0 and self._heap[1].nextRun <= now do
+			local task = self._heap[1]
+			
+			local success, err = pcall(task.fn)
+			
+			local intervalMultiplier = aggression[task.category] or 1
+			task.nextRun = now + (task.baseInterval * intervalMultiplier)
+			
+			self:_heapBubbleDown(1)
+		end
+	end
+
+	Maestro.SpatialGrid = {
+		GRID_SIZE = 200,
+		_grid = {},
+		_trackedObjects = setmetatable({}, {__mode = "k"}),
+	}
+	
+	function Maestro.SpatialGrid:GetCell(position)
+		local grid_size = self.GRID_SIZE
+		local x = math_floor(position.X / grid_size)
+		local z = math_floor(position.Z / grid_size)
+		return x .. "," .. z
+	end
+
+	function Maestro.SpatialGrid:Register(obj, data)
+		local cellId = self:GetCell(obj.Position)
+		self._grid[cellId] = self._grid[cellId] or {}
+		table_insert(self._grid[cellId], obj)
+		self._trackedObjects[obj] = { cell = cellId, data = data }
+	end
+
+	function Maestro.SpatialGrid:UpdateObjectPosition(obj)
+		local tracked = self._trackedObjects[obj]
+		if not tracked then return end
+		
+		local newCellId = self:GetCell(obj.Position)
+		if tracked.cell ~= newCellId then
+			local oldCell = self._grid[tracked.cell]
+			if oldCell then
+				for i, v in ipairs(oldCell) do
+					if v == obj then
+						table_remove(oldCell, i)
+						break
+					end
+				end
+			end
+			self._grid[newCellId] = self._grid[newCellId] or {}
+			table_insert(self._grid[newCellId], obj)
+			tracked.cell = newCellId
+		end
+	end
+	
+	function Maestro.SpatialGrid:GetNearbyObjects(position, radius)
+		local results = {}
+		local grid_size = self.GRID_SIZE
+		local cellX = math_floor(position.X / grid_size)
+		local cellZ = math_floor(position.Z / grid_size)
+		local cellRadius = math_floor(radius / grid_size) + 1
+
+		for i = cellX - cellRadius, cellX + cellRadius do
+			for j = cellZ - cellRadius, cellZ + cellRadius do
+				local cell = self._grid[i .. "," .. j]
+				if cell then
+					for _, obj in ipairs(cell) do
+						table_insert(results, obj)
+					end
+				end
+			end
+		end
+		return results
+	end
+
+	Maestro.EffectSystem = {
+		_active = {},
+		_inactive = {},
+		_templates = {},
+		_objectToTemplate = setmetatable({}, {__mode = "k"}),
+		_objectToIndex = setmetatable({}, {__mode = "k"}),
+		ALLOWANCE = {[1]=1, [2]=0.8, [3]=0.4, [4]=0.1},
+		MAX_EFFECTS = {[1]=100, [2]=50, [3]=20, [4]=5},
+	}
+
+	function Maestro.EffectSystem:Preload(templateName, count)
+		local template = ReplicatedStorage.Assets:FindFirstChild(templateName)
+		if not template then return end
+		self._templates[templateName] = template
+		self._inactive[templateName] = {}
+		for _ = 1, count do
+			local obj = template:Clone()
+			obj.Parent = nil
+			table_insert(self._inactive[templateName], obj)
+		end
+	end
+	
+	function Maestro.EffectSystem:Get(templateName)
+		local aggression = math_floor(Maestro.Orchestrator._aggression.effects + 0.5)
+		local activePool = self._active[templateName] or {}
+		
+		if #activePool >= self.MAX_EFFECTS[aggression] or math.random() > self.ALLOWANCE[aggression] then
+			return nil
+		end
+		self._active[templateName] = activePool
+
+		local inactivePool = self._inactive[templateName] or {}
+		self._inactive[templateName] = inactivePool
+		local obj = if #inactivePool > 0 then table_remove(inactivePool) else self._templates[templateName]:Clone()
+		
+		table_insert(activePool, obj)
+		self._objectToTemplate[obj] = templateName
+		self._objectToIndex[obj] = #activePool
+		
+		return obj
+	end
+
+	function Maestro.EffectSystem:Return(obj)
+		if not obj or not obj.Parent then return end
+		local templateName = self._objectToTemplate[obj]
+		if not templateName then return obj:Destroy() end
+		
+		obj.Parent = nil
+		
+		local activePool = self._active[templateName]
+		local index = self._objectToIndex[obj]
+		if not (activePool and index and activePool[index] == obj) then return obj:Destroy() end
+
+		local lastObj = table_remove(activePool)
+		if lastObj ~= obj then
+			activePool[index] = lastObj
+			self._objectToIndex[lastObj] = index
+		end
+		self._objectToIndex[obj] = nil
+
+		table_insert(self._inactive[templateName], obj)
+	end
+	
+	Maestro.LODSystem = {
+		DISTANCES = {
+			[1] = {100, 200, 400},
+			[2] = {60, 140, 300},
+			[3] = {40, 90, 180},
+		},
+	}
+
+	function Maestro.LODSystem:Register(model, tag)
+		if not (model:IsA("Model") and model.PrimaryPart) then return end
+		local partsToUpdate = {}
+		for _, descendant in ipairs(model:GetDescendants()) do
+			if descendant:IsA("BasePart") then
+				table_insert(partsToUpdate, descendant)
+			end
+		end
+
+		local entryData = {
+			tag = tag,
+			parts = partsToUpdate,
+			lastFidelity = -1,
+			lastTransparency = -1,
+		}
+		Maestro.SpatialGrid:Register(model.PrimaryPart, {LOD = entryData})
+	end
+
+	function Maestro.LODSystem:Update(cameraPos)
+		local aggression = math_floor(Maestro.Orchestrator._aggression.render + 0.5)
+		aggression = math_max(1, math_min(3, aggression))
+		local levels = self.DISTANCES[aggression]
+		local levelsSqr = {levels[1]^2, levels[2]^2, levels[3]^2}
+		
+		local nearbyObjects = Maestro.SpatialGrid:GetNearbyObjects(cameraPos, levels[3] + 100)
+
+		for _, part in ipairs(nearbyObjects) do
+			local trackedData = Maestro.SpatialGrid._trackedObjects[part]
+			if not (part and part.Parent and trackedData and trackedData.data.LOD) then continue end
+
+			local entry = trackedData.data.LOD
+			local distanceSqr = (part.Position - cameraPos).MagnitudeSqr
+			local newTransparency, newFidelity
+
+			if distanceSqr < levelsSqr[1] then
+				newTransparency = 0; newFidelity = Enum.RenderFidelity.Precise
+			elseif distanceSqr < levelsSqr[2] then
+				newTransparency = 0.6; newFidelity = Enum.RenderFidelity.Automatic
+			else
+				newTransparency = 1; newFidelity = Enum.RenderFidelity.Performance
+			end
+			
+			if entry.lastTransparency ~= newTransparency then
+				for _, p in ipairs(entry.parts) do
+					if p.Transparency ~= newTransparency then p.Transparency = newTransparency end
+				end
+				entry.lastTransparency = newTransparency
+			end
+			
+			if entry.lastFidelity ~= newFidelity then
+				for _, p in ipairs(entry.parts) do
+					if p.RenderFidelity ~= newFidelity then p.RenderFidelity = newFidelity end
+				end
+				entry.lastFidelity = newFidelity
+			end
+		end
+	end
+	
+	Maestro.PhysicsGovernor = {
+		DISTANCES_SQR = {[1] = math_huge, [2] = 200^2, [3] = 100^2, [4] = 50^2}
+	}
+
+	function Maestro.PhysicsGovernor:Register(model)
+		if not model.PrimaryPart then return end
+		local parts = {}
+		for _, part in ipairs(model:GetDescendants()) do
+			if part:IsA("BasePart") and not part.Anchored then
+				table_insert(parts, part)
+			end
+		end
+		if #parts > 0 then
+			Maestro.SpatialGrid:Register(model.PrimaryPart, {Physics = parts})
+		end
+	end
+	
+	function Maestro.PhysicsGovernor:Update(cameraPos)
+		local aggression = math_floor(Maestro.Orchestrator._aggression.physics + 0.5)
+		aggression = math_max(1, math_min(4, aggression))
+		local physicsDistanceSqr = self.DISTANCES_SQR[aggression]
+		
+		local nearbyObjects = Maestro.SpatialGrid:GetNearbyObjects(cameraPos, 500)
+
+		for _, pPart in ipairs(nearbyObjects) do
+			local trackedData = Maestro.SpatialGrid._trackedObjects[pPart]
+			if not (pPart and pPart.Parent and trackedData and trackedData.data.Physics) then continue end
+			
+			local parts = trackedData.data.Physics
+			local shouldBeAnchored = (pPart.Position - cameraPos).MagnitudeSqr > physicsDistanceSqr
+			for _, part in ipairs(parts) do
+				if part and part.Anchored ~= shouldBeAnchored then
+					part.Anchored = shouldBeAnchored
+				end
+			end
+		end
+	end
+
+	Maestro.DebrisManager = {
+		_debris = {},
+		MAX_DEBRIS = 50,
+	}
+
+	function Maestro.DebrisManager:Track(instance)
+		if #self._debris >= self.MAX_DEBRIS then
+			local oldest = table_remove(self._debris, 1)
+			if oldest then oldest:Destroy() end
+		end
+		table_insert(self._debris, instance)
+	end
+	
+	function Maestro.DebrisManager:Cleanup()
+		local amountToClean = math_floor(#self._debris * 0.1) + 1
+		for i = 1, amountToClean do
+			local obj = table_remove(self._debris, 1)
+			if obj then obj:Destroy() else break end
+		end
+	end
+	
+	Maestro.CoreOptimizer = {
+		_originalQuality = GameSettings.SavedQualityLevel,
+		_originalTechnology = Lighting.Technology,
+	}
+
+	function Maestro.CoreOptimizer:ActivatePotatoMode()
+		GameSettings.SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel1
+		Lighting.Technology = Enum.Technology.Compatibility
+		Lighting.Shadows = false
+		Lighting.GlobalShadows = false
+	end
+
+	function Maestro.CoreOptimizer:DeactivatePotatoMode()
+		GameSettings.SavedQualityLevel = self._originalQuality
+		Lighting.Technology = self._originalTechnology
+		Lighting.Shadows = true
+		Lighting.GlobalShadows = true
+	end
+
+	function Maestro:Initialize()
+		self.EffectSystem:Preload("ExplosionEffect", 20)
+		self.EffectSystem:Preload("MuzzleFlash", 15)
+
+		local function setupModel(model)
+			if CollectionService:HasTag(model, "ManagedRender") then
+				self.LODSystem:Register(model, "ManagedRender")
+			end
+			if CollectionService:HasTag(model, "ManagedPhysics") then
+				self.PhysicsGovernor:Register(model, "ManagedPhysics")
+			end
+		end
+
+		for _, tag in ipairs({"ManagedRender", "ManagedPhysics"}) do
+			for _, model in ipairs(CollectionService:GetTagged(tag)) do
+				task_spawn(setupModel, model)
+			end
+			CollectionService:GetInstanceAddedSignal(tag):Connect(setupModel)
+		end
+		
+		CollectionService:GetInstanceAddedSignal("Debris"):Connect(function(instance)
+			self.DebrisManager:Track(instance)
+		end)
+
+		self.Scheduler:AddTask("LOD", function() self.LODSystem:Update(Camera.CFrame.Position) end, 0.1, "render")
+		self.Scheduler:AddTask("Physics", function() self.PhysicsGovernor:Update(Camera.CFrame.Position) end, 0.25, "physics")
+		self.Scheduler:AddTask("Debris", function() self.DebrisManager:Cleanup() end, 2, "effects")
+
+		RunService.Heartbeat:Connect(function(dt)
+			self.Orchestrator:Update(dt)
+			self.Scheduler:Run()
+		end)
+	end
 end
 
-function PerformanceGovernor:Update(deltaTime)
-    local history = self._fpsHistory
-    if #history < 30 then
-        table_insert(history, deltaTime)
-        self._totalDeltaTime = self._totalDeltaTime + deltaTime
-    else
-        local oldDelta = history[self._historyIndex]
-        self._totalDeltaTime = self._totalDeltaTime - oldDelta + deltaTime
-        history[self._historyIndex] = deltaTime
-        self._historyIndex = (self._historyIndex % 30) + 1
-    end
-    
-    local now = os_clock()
-    if now - self._lastCheck < 1 then return end
-    self._lastCheck = now
-    
-    local avgFps = self:GetAverageFPS()
-    local newProfile
-    
-    if avgFps > self.PROFILES.Medium.fpsThreshold then
-        newProfile = self.PROFILES.High
-    elseif avgFps > self.PROFILES.Low.fpsThreshold then
-        newProfile = self.PROFILES.Medium
-    else
-        newProfile = self.PROFILES.Low
-    end
-    
-    if newProfile ~= self._currentProfile then
-        self._currentProfile = newProfile
-        _G.Scheduler:SetMaxTasks(newProfile.maxTasksPerFrame)
-        _G.LODSystem:ApplyProfile(newProfile)
-    end
-end
-
-local Scheduler = {}
-_G.Scheduler = Scheduler
-Scheduler._tasks = {}
-Scheduler._MAX_TASKS_PER_FRAME = PerformanceGovernor.PROFILES.High.maxTasksPerFrame
-
-function Scheduler:SetMaxTasks(num)
-    self._MAX_TASKS_PER_FRAME = num
-end
-
-function Scheduler:AddTask(fn, interval, priority)
-    local newTask = {fn=fn, interval=interval, lastRun=0, priority=priority or 0}
-    local tasks = self._tasks
-    for i = 1, #tasks do
-        if newTask.priority > tasks[i].priority then
-            table_insert(tasks, i, newTask)
-            return newTask
-        end
-    end
-    table_insert(tasks, newTask)
-    return newTask
-end
-
-function Scheduler:Run()
-    local now = os_clock()
-    local processed = 0
-    for i = 1, #self._tasks do
-        local task = self._tasks[i]
-        if now - task.lastRun >= task.interval then
-            task.lastRun = now
-            task.fn()
-            processed += 1
-            if processed >= self._MAX_TASKS_PER_FRAME then break end
-        end
-    end
-end
-
-local ObjectPool = {}
-_G.ObjectPool = ObjectPool
-ObjectPool._active = {}
-ObjectPool._inactive = {}
-ObjectPool._templates = {}
-ObjectPool._objectToTemplate = setmetatable({}, {__mode = "k"})
-ObjectPool._objectToIndex = setmetatable({}, {__mode = "k"})
-
-function ObjectPool:Preload(templateName, count)
-    local template = ReplicatedStorage.Assets:FindFirstChild(templateName)
-    if not template then return end
-    self._templates[templateName] = template
-    self._inactive[templateName] = self._inactive[templateName] or {}
-    for _ = 1, count do
-        local obj = template:Clone()
-        obj.Parent = nil
-        table_insert(self._inactive[templateName], obj)
-    end
-end
-
-function ObjectPool:Get(templateName)
-    local profile = PerformanceGovernor._currentProfile
-    local activePool = self._active[templateName] or {}
-    self._active[templateName] = activePool
-    
-    if #activePool >= profile.maxActiveEffects or math.random() > profile.particleAllowance then
-        return nil
-    end
-
-    local inactivePool = self._inactive[templateName]
-    local obj = (#inactivePool > 0) and table_remove(inactivePool) or self._templates[templateName]:Clone()
-    
-    table_insert(activePool, obj)
-    self._objectToTemplate[obj] = templateName
-    self._objectToIndex[obj] = #activePool
-    
-    return obj
-end
-
-local function resetObjectState(obj)
-    obj.Parent = nil
-    if obj:IsA("BasePart") then
-        obj.Transparency = 0
-    end
-end
-
-function ObjectPool:Return(obj)
-    local templateName = self._objectToTemplate[obj]
-    if not (templateName and self._active[templateName]) then
-        obj:Destroy()
-        return
-    end
-
-    resetObjectState(obj)
-    
-    local activePool = self._active[templateName]
-    local index = self._objectToIndex[obj]
-
-    if not index or activePool[index] ~= obj then
-        obj:Destroy()
-        return
-    end
-
-    local lastObj = table_remove(activePool)
-    if lastObj ~= obj then
-        activePool[index] = lastObj
-        self._objectToIndex[lastObj] = index
-    end
-    self._objectToIndex[obj] = nil
-
-    table_insert(self._inactive[templateName], obj)
-end
-
-local SpatialSystem = {}
-_G.SpatialSystem = SpatialSystem
-SpatialSystem._partitionSize = 128
-SpatialSystem._partitions = {}
-SpatialSystem._objectToPartitionData = setmetatable({}, {__mode = "k"})
-
-function SpatialSystem:_getPartitionCoords(pos)
-    return math_floor(pos.X / self._partitionSize), math_floor(pos.Z / self._partitionSize)
-end
-
-function SpatialSystem:AddObject(obj)
-    local x, z = self:_getPartitionCoords(obj.Position)
-    local id = x .. "," .. z
-    self._partitions[id] = self._partitions[id] or {}
-    local part = self._partitions[id]
-    table_insert(part, obj)
-    self._objectToPartitionData[obj] = {id = id, index = #part}
-end
-
-function SpatialSystem:RemoveObject(obj)
-    local data = self._objectToPartitionData[obj]
-    if not data then return end
-    
-    local part = self._partitions[data.id]
-    if not part or #part == 0 then return end
-    
-    local idx = data.index
-    local last = table_remove(part)
-
-    if last ~= obj then
-        part[idx] = last
-        self._objectToPartitionData[last].index = idx
-    end
-    self._objectToPartitionData[obj] = nil
-end
-
-function SpatialSystem:UpdateObject(obj)
-    local oldData = self._objectToPartitionData[obj]
-    if not oldData then
-        self:AddObject(obj)
-        return
-    end
-    local x, z = self:_getPartitionCoords(obj.Position)
-    if oldData.id ~= (x .. "," .. z) then
-        self:RemoveObject(obj)
-        self:AddObject(obj)
-    end
-end
-
-function SpatialSystem:GetNearby(pos)
-    local results = {}
-    local cx, cz = self:_getPartitionCoords(pos)
-    for x = cx - 1, cx + 1 do
-        for z = cz - 1, cz + 1 do
-            local id = x .. "," .. z
-            local part = self._partitions[id]
-            if part then
-                for _, o in ipairs(part) do
-                    table_insert(results, o)
-                end
-            end
-        end
-    end
-    return results
-end
-
-local LODSystem = {}
-_G.LODSystem = LODSystem
-LODSystem._lodEntries = {}
-LODSystem._currentLevelsSqr = {}
-
-function LODSystem:ApplyProfile(profile)
-    local dist = profile.lodDistances
-    self._currentLevelsSqr = {
-        dist[1] * dist[1],
-        dist[2] * dist[2],
-        dist[3] * dist[3]
-    }
-end
-
-function LODSystem:RegisterModel(model)
-    if not (model:IsA("Model") and model.PrimaryPart) then return end
-    local entry = {
-        primaryPart = model.PrimaryPart,
-        settings = {
-            highTrans = model:GetAttribute("highTrans") or 0,
-            medTrans = model:GetAttribute("medTrans") or 0.5,
-            lowTrans = model:GetAttribute("lowTrans") or 0.8
-        }
-    }
-    self._lodEntries[model.PrimaryPart] = entry
-    SpatialSystem:AddObject(model.PrimaryPart)
-end
-
-function LODSystem:Update(cameraPos)
-    local nearbyObjects = SpatialSystem:GetNearby(cameraPos)
-    local levelsSqr = self._currentLevelsSqr
-    for _, part in ipairs(nearbyObjects) do
-        local entry = self._lodEntries[part]
-        if entry then
-            local distanceSqr = (part.Position - cameraPos).MagnitudeSqr
-            local newTransparency
-            
-            if distanceSqr < levelsSqr[1] then
-                newTransparency = entry.settings.highTrans
-            elseif distanceSqr < levelsSqr[2] then
-                newTransparency = entry.settings.medTrans
-            else
-                newTransparency = entry.settings.lowTrans
-            end
-            
-            if part.Transparency ~= newTransparency then
-                part.Transparency = newTransparency
-            end
-        end
-    end
-end
-
-local function Initialize()
-    LODSystem:ApplyProfile(PerformanceGovernor.PROFILES.High)
-    ObjectPool:Preload("ExplosionEffect", 20)
-
-    local lodFolder = Workspace:FindFirstChild("LODModels")
-    if lodFolder then
-        for _, model in ipairs(lodFolder:GetChildren()) do
-            LODSystem:RegisterModel(model)
-        end
-    end
-    
-    RunService.Heartbeat:Connect(function(deltaTime)
-        PerformanceGovernor:Update(deltaTime)
-        Scheduler:Run()
-    end)
-    
-    Scheduler:AddTask(function()
-        LODSystem:Update(Camera.CFrame.Position)
-    end, 0.15, 100)
-end
-
-pcall(Initialize)
+pcall(Maestro.Initialize, Maestro)
