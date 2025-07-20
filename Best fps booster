@@ -1,0 +1,337 @@
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+local os_clock = os.clock
+local table_insert = table.insert
+local table_remove = table.remove
+local math_floor = math.floor
+local ipairs = ipairs
+local Vector3_new = Vector3.new
+
+local PerformanceGovernor = {}
+PerformanceGovernor.PROFILES = {
+    Low = {
+        label = "Low",
+        fpsThreshold = 25,
+        lodDistances = {40, 80, 150},
+        maxTasksPerFrame = 3,
+        particleAllowance = 0.3,
+        maxActiveEffects = 15,
+    },
+    Medium = {
+        label = "Medium",
+        fpsThreshold = 45,
+        lodDistances = {70, 150, 250},
+        maxTasksPerFrame = 5,
+        particleAllowance = 0.7,
+        maxActiveEffects = 40,
+    },
+    High = {
+        label = "High",
+        fpsThreshold = 999,
+        lodDistances = {90, 180, 350},
+        maxTasksPerFrame = 8,
+        particleAllowance = 1.0,
+        maxActiveEffects = 80,
+    },
+}
+PerformanceGovernor._currentProfile = PerformanceGovernor.PROFILES.High
+PerformanceGovernor._fpsHistory = {}
+PerformanceGovernor._lastCheck = 0
+PerformanceGovernor._totalDeltaTime = 0
+PerformanceGovernor._historyIndex = 1
+
+function PerformanceGovernor:GetAverageFPS()
+    local count = #self._fpsHistory
+    if count == 0 then return 60 end
+    return count / self._totalDeltaTime
+end
+
+function PerformanceGovernor:Update(deltaTime)
+    local history = self._fpsHistory
+    if #history < 30 then
+        table_insert(history, deltaTime)
+        self._totalDeltaTime = self._totalDeltaTime + deltaTime
+    else
+        local oldDelta = history[self._historyIndex]
+        self._totalDeltaTime = self._totalDeltaTime - oldDelta + deltaTime
+        history[self._historyIndex] = deltaTime
+        self._historyIndex = (self._historyIndex % 30) + 1
+    end
+    
+    local now = os_clock()
+    if now - self._lastCheck < 1 then return end
+    self._lastCheck = now
+    
+    local avgFps = self:GetAverageFPS()
+    local newProfile
+    
+    if avgFps > self.PROFILES.Medium.fpsThreshold then
+        newProfile = self.PROFILES.High
+    elseif avgFps > self.PROFILES.Low.fpsThreshold then
+        newProfile = self.PROFILES.Medium
+    else
+        newProfile = self.PROFILES.Low
+    end
+    
+    if newProfile ~= self._currentProfile then
+        self._currentProfile = newProfile
+        _G.Scheduler:SetMaxTasks(newProfile.maxTasksPerFrame)
+        _G.LODSystem:ApplyProfile(newProfile)
+    end
+end
+
+local Scheduler = {}
+_G.Scheduler = Scheduler
+Scheduler._tasks = {}
+Scheduler._MAX_TASKS_PER_FRAME = PerformanceGovernor.PROFILES.High.maxTasksPerFrame
+
+function Scheduler:SetMaxTasks(num)
+    self._MAX_TASKS_PER_FRAME = num
+end
+
+function Scheduler:AddTask(fn, interval, priority)
+    local newTask = {fn=fn, interval=interval, lastRun=0, priority=priority or 0}
+    local tasks = self._tasks
+    for i = 1, #tasks do
+        if newTask.priority > tasks[i].priority then
+            table_insert(tasks, i, newTask)
+            return newTask
+        end
+    end
+    table_insert(tasks, newTask)
+    return newTask
+end
+
+function Scheduler:Run()
+    local now = os_clock()
+    local processed = 0
+    for i = 1, #self._tasks do
+        local task = self._tasks[i]
+        if now - task.lastRun >= task.interval then
+            task.lastRun = now
+            task.fn()
+            processed += 1
+            if processed >= self._MAX_TASKS_PER_FRAME then break end
+        end
+    end
+end
+
+local ObjectPool = {}
+_G.ObjectPool = ObjectPool
+ObjectPool._active = {}
+ObjectPool._inactive = {}
+ObjectPool._templates = {}
+ObjectPool._objectToTemplate = setmetatable({}, {__mode = "k"})
+ObjectPool._objectToIndex = setmetatable({}, {__mode = "k"})
+
+function ObjectPool:Preload(templateName, count)
+    local template = ReplicatedStorage.Assets:FindFirstChild(templateName)
+    if not template then return end
+    self._templates[templateName] = template
+    self._inactive[templateName] = self._inactive[templateName] or {}
+    for _ = 1, count do
+        local obj = template:Clone()
+        obj.Parent = nil
+        table_insert(self._inactive[templateName], obj)
+    end
+end
+
+function ObjectPool:Get(templateName)
+    local profile = PerformanceGovernor._currentProfile
+    local activePool = self._active[templateName] or {}
+    self._active[templateName] = activePool
+    
+    if #activePool >= profile.maxActiveEffects or math.random() > profile.particleAllowance then
+        return nil
+    end
+
+    local inactivePool = self._inactive[templateName]
+    local obj = (#inactivePool > 0) and table_remove(inactivePool) or self._templates[templateName]:Clone()
+    
+    table_insert(activePool, obj)
+    self._objectToTemplate[obj] = templateName
+    self._objectToIndex[obj] = #activePool
+    
+    return obj
+end
+
+local function resetObjectState(obj)
+    obj.Parent = nil
+    if obj:IsA("BasePart") then
+        obj.Transparency = 0
+    end
+end
+
+function ObjectPool:Return(obj)
+    local templateName = self._objectToTemplate[obj]
+    if not (templateName and self._active[templateName]) then
+        obj:Destroy()
+        return
+    end
+
+    resetObjectState(obj)
+    
+    local activePool = self._active[templateName]
+    local index = self._objectToIndex[obj]
+
+    if not index or activePool[index] ~= obj then
+        obj:Destroy()
+        return
+    end
+
+    local lastObj = table_remove(activePool)
+    if lastObj ~= obj then
+        activePool[index] = lastObj
+        self._objectToIndex[lastObj] = index
+    end
+    self._objectToIndex[obj] = nil
+
+    table_insert(self._inactive[templateName], obj)
+end
+
+local SpatialSystem = {}
+_G.SpatialSystem = SpatialSystem
+SpatialSystem._partitionSize = 128
+SpatialSystem._partitions = {}
+SpatialSystem._objectToPartitionData = setmetatable({}, {__mode = "k"})
+
+function SpatialSystem:_getPartitionCoords(pos)
+    return math_floor(pos.X / self._partitionSize), math_floor(pos.Z / self._partitionSize)
+end
+
+function SpatialSystem:AddObject(obj)
+    local x, z = self:_getPartitionCoords(obj.Position)
+    local id = x .. "," .. z
+    self._partitions[id] = self._partitions[id] or {}
+    local part = self._partitions[id]
+    table_insert(part, obj)
+    self._objectToPartitionData[obj] = {id = id, index = #part}
+end
+
+function SpatialSystem:RemoveObject(obj)
+    local data = self._objectToPartitionData[obj]
+    if not data then return end
+    
+    local part = self._partitions[data.id]
+    if not part or #part == 0 then return end
+    
+    local idx = data.index
+    local last = table_remove(part)
+
+    if last ~= obj then
+        part[idx] = last
+        self._objectToPartitionData[last].index = idx
+    end
+    self._objectToPartitionData[obj] = nil
+end
+
+function SpatialSystem:UpdateObject(obj)
+    local oldData = self._objectToPartitionData[obj]
+    if not oldData then
+        self:AddObject(obj)
+        return
+    end
+    local x, z = self:_getPartitionCoords(obj.Position)
+    if oldData.id ~= (x .. "," .. z) then
+        self:RemoveObject(obj)
+        self:AddObject(obj)
+    end
+end
+
+function SpatialSystem:GetNearby(pos)
+    local results = {}
+    local cx, cz = self:_getPartitionCoords(pos)
+    for x = cx - 1, cx + 1 do
+        for z = cz - 1, cz + 1 do
+            local id = x .. "," .. z
+            local part = self._partitions[id]
+            if part then
+                for _, o in ipairs(part) do
+                    table_insert(results, o)
+                end
+            end
+        end
+    end
+    return results
+end
+
+local LODSystem = {}
+_G.LODSystem = LODSystem
+LODSystem._lodEntries = {}
+LODSystem._currentLevelsSqr = {}
+
+function LODSystem:ApplyProfile(profile)
+    local dist = profile.lodDistances
+    self._currentLevelsSqr = {
+        dist[1] * dist[1],
+        dist[2] * dist[2],
+        dist[3] * dist[3]
+    }
+end
+
+function LODSystem:RegisterModel(model)
+    if not (model:IsA("Model") and model.PrimaryPart) then return end
+    local entry = {
+        primaryPart = model.PrimaryPart,
+        settings = {
+            highTrans = model:GetAttribute("highTrans") or 0,
+            medTrans = model:GetAttribute("medTrans") or 0.5,
+            lowTrans = model:GetAttribute("lowTrans") or 0.8
+        }
+    }
+    self._lodEntries[model.PrimaryPart] = entry
+    SpatialSystem:AddObject(model.PrimaryPart)
+end
+
+function LODSystem:Update(cameraPos)
+    local nearbyObjects = SpatialSystem:GetNearby(cameraPos)
+    local levelsSqr = self._currentLevelsSqr
+    for _, part in ipairs(nearbyObjects) do
+        local entry = self._lodEntries[part]
+        if entry then
+            local distanceSqr = (part.Position - cameraPos).MagnitudeSqr
+            local newTransparency
+            
+            if distanceSqr < levelsSqr[1] then
+                newTransparency = entry.settings.highTrans
+            elseif distanceSqr < levelsSqr[2] then
+                newTransparency = entry.settings.medTrans
+            else
+                newTransparency = entry.settings.lowTrans
+            end
+            
+            if part.Transparency ~= newTransparency then
+                part.Transparency = newTransparency
+            end
+        end
+    end
+end
+
+local function Initialize()
+    LODSystem:ApplyProfile(PerformanceGovernor.PROFILES.High)
+    ObjectPool:Preload("ExplosionEffect", 20)
+
+    local lodFolder = Workspace:FindFirstChild("LODModels")
+    if lodFolder then
+        for _, model in ipairs(lodFolder:GetChildren()) do
+            LODSystem:RegisterModel(model)
+        end
+    end
+    
+    RunService.Heartbeat:Connect(function(deltaTime)
+        PerformanceGovernor:Update(deltaTime)
+        Scheduler:Run()
+    end)
+    
+    Scheduler:AddTask(function()
+        LODSystem:Update(Camera.CFrame.Position)
+    end, 0.15, 100)
+end
+
+pcall(Initialize)
