@@ -185,7 +185,7 @@ do
 		self.Scheduler:AddTask({name="Resources",fn=function()self.ResourceSentinel:Cleanup()end,baseInterval=15,category="resource"})
 		
 		self.Scheduler:Run()
-		print("Aetherius Engine v7.0 is now fully autonomous and active.")
+		print("Aetherius Engine v1.0 is now fully autonomous and active. Enjoy!")
 	end
 end
 
