@@ -158,7 +158,7 @@ do
 	function Aetherius.CoreOptimizer:RestoreQuality()GameSettings.SavedQualityLevel=Enum.SavedQualitySetting.Automatic;Lighting.Technology=Enum.Technology.ShadowMap;Lighting.Shadows=true;end
 
 	function Aetherius:Activate()
-		print("Activating Aetherius Engine v7.0 with Cooldown Logic...")
+		print("Activating Aetherius Engine v1.0 with Cooldown Logic...")
 		
 		task_spawn(self.Calibrator.Run)
 		task_spawn(self.AutoTagger.Run)
