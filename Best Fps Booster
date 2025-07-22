@@ -1,192 +1,86 @@
 local Aetherius = {}
-
 do
-	local RunService = game:GetService("RunService")
-	local CollectionService = game:GetService("CollectionService")
-	local Workspace = game:GetService("Workspace")
-	local Stats = game:GetService("Stats")
-	local Lighting = game:GetService("Lighting")
-	local ContentProvider = game:GetService("ContentProvider")
-	local UserSettings = UserSettings()
-	local GameSettings = UserSettings:GetService("UserGameSettings")
+	local RS,CS,WS,ST,LI,CP,UGS=game:GetService("RunService"),game:GetService("CollectionService"),game:GetService("Workspace"),game:GetService("Stats"),game:GetService("Lighting"),game:GetService("ContentProvider"),UserSettings():GetService("UserGameSettings")
+	local Cam,os_c,tbl_i,tbl_r,tbl_c,mf,mh,me,mm,mmax,mcl=WS.CurrentCamera,os.clock,table.insert,table.remove,table.clone,math.floor,math.huge,math.exp,math.min,math.max,math.clamp
+	local ipairs,pairs,pcall,type,t_s,t_w,t_d,co_c,co_r=ipairs,pairs,pcall,type,task.spawn,task.wait,task.delay,coroutine.create,coroutine.resume
 
-	local Camera = Workspace.CurrentCamera
-	
-	local os_clock, table_insert, table_remove, table_clone = os.clock, table.insert, table.remove, table.clone
-	local math_floor, math_huge, math_exp, math_min, math_max, math_clamp = math.floor, math.huge, math.exp, math.min, math.max, math.clamp
-	local ipairs, pairs, pcall, type = ipairs, pairs, pcall, type
-	local task_spawn, task_wait, task_delay = task.spawn, task.wait, task.delay
-	local coroutine_create, coroutine_resume = coroutine.create, coroutine.resume
-
-	Aetherius.Orchestrator = {
-		PROFILES = {[1]={f=120,p=60,m=2000},[2]={f=60,p=55,m=1200},[3]={f=40,p=35,m=800},[4]={f=25,p=20,m=400}},
-		_aggression = {render=2, physics=2, effects=2, density=2, core=2, resource=2},
-		_fpsHistory = {}, _totalDeltaTime = 0, _historyIndex = 1, _lastCheck = 0, _isCalibrated = false,
-		_state = "Normal",
-		_coolDownStartTime = 0,
-		COOL_DOWN_DURATION = 8,
-		RECOVERY_DURATION = 5,
-		RECOVERY_FPS_THRESHOLD = 35,
-		EMERGENCY_FPS_THRESHOLD = 25,
-		_potatoModeActive = false
+	Aetherius.Orch={
+		PROFS={[1]={f=120,p=60,m=2000},[2]={f=60,p=55,m=1200},[3]={f=40,p=35,m=800},[4]={f=25,p=20,m=400}},
+		aggr={render=2,physics=2,effects=2,density=2,core=2,resource=2},
+		_avgFps=60,_lastCheck=0,_isCalibrated=false,_state="Normal",_cdStart=0,_potato=false,
+		CD_DUR=8,REC_DUR=5,REC_FPS=35,EMG_FPS=25,
 	}
-
-	function Aetherius.Orchestrator:GetAverageFPS()
-		local count = #self._fpsHistory
-		return if count > 0 then count / self._totalDeltaTime else 60
-	end
-
-	function Aetherius.Orchestrator:EnterEmergencyMode()
-		if self._state == "Emergency" then return end
-		self._state = "Emergency"
-		print("Aetherius: EMERGENCY MODE - Low FPS detected. Applying maximum optimization.")
-		
-		for k,_ in pairs(self._aggression) do self._aggression[k] = 5 end
-		Aetherius.CoreOptimizer:SetQualityLevel(1)
-		Aetherius.EffectManager:EnterEmergencyMode(true)
-	end
-	
-	function Aetherius.Orchestrator:BeginCooldown()
-		self._state = "Cooldown"
-		self._coolDownStartTime = os_clock()
-		print("Aetherius: COOLDOWN MODE - FPS has recovered. Stabilizing before restoration.")
-	end
-
-	function Aetherius.Orchestrator:BeginGradualExit()
-		self._state = "Normal"
-		print("Aetherius: RESTORATION - Cooldown finished. Gradually restoring visuals.")
-
-		Aetherius.EffectManager:EnterEmergencyMode(false)
-		
-		local startAggression = table_clone(self._aggression)
-		local elapsed = 0
-		local duration = self.RECOVERY_DURATION
-		
-		task_spawn(function()
-			while elapsed < duration and self._state == "Normal" do
-				local alpha = elapsed / duration
-				for k, startValue in pairs(startAggression) do
-					local targetValue = 2
-					self._aggression[k] = startValue + (targetValue - startValue) * alpha
-				end
-				elapsed += RunService.Heartbeat:Wait()
-			end
-			if self._state == "Normal" then
-				if not self._potatoModeActive then Aetherius.CoreOptimizer:RestoreQuality() end
-				print("Aetherius: Restoration complete. System is back to normal.")
-			end
-		end)
-	end
-
-	function Aetherius.Orchestrator:AnalyzeAndAdjust()
-		if not self._isCalibrated then return end
-		local avgFps = self:GetAverageFPS()
-
-		if self._state == "Normal" then
-			if avgFps < self.EMERGENCY_FPS_THRESHOLD then self:EnterEmergencyMode() end
-		elseif self._state == "Emergency" then
-			if avgFps > self.RECOVERY_FPS_THRESHOLD then self:BeginCooldown() end
-		elseif self._state == "Cooldown" then
-			if avgFps < self.EMERGENCY_FPS_THRESHOLD then self:EnterEmergencyMode()
-			elseif os_clock() - self._coolDownStartTime > self.COOL_DOWN_DURATION then self:BeginGradualExit() end
-		end
-
-		if self._state ~= "Normal" then return end
-
-		local profile = self.PROFILES[4]
-		if avgFps > self.PROFILES[2].f then profile=self.PROFILES[1] elseif avgFps > self.PROFILES[3].f then profile=self.PROFILES[2] else profile=self.PROFILES[3] end
-		local rs,ps,ms=avgFps/profile.f,Workspace:GetRealPhysicsFPS()/profile.p,profile.m/Stats.Total.Value
-		local nr,np,ne,nd,nc,nres = if rs<0.9 then rs<0.7 and 3 or 2 else 1,if ps<0.9 then ps<0.7 and 4 or 3 else 1,if rs<1 or ms<1 then rs<0.8 or ms<0.8 and 4 or 3 else 1,if rs<0.9 then rs<0.75 and 4 or 3 else 1,profile==self.PROFILES[4] and 3 or profile==self.PROFILES[3] and 2 or 1,if ms<0.8 then 3 else 1
-		local a=1-math_exp(-0.5*2)
-		self._aggression.render=self._aggression.render+(nr-self._aggression.render)*a;self._aggression.physics=self._aggression.physics+(np-self._aggression.physics)*a;self._aggression.effects=self._aggression.effects+(ne-self._aggression.effects)*a;self._aggression.density=self._aggression.density+(nd-self._aggression.density)*a;self._aggression.core=self._aggression.core+(nc-self._aggression.core)*a;self._aggression.resource=self._aggression.resource+(nres-self._aggression.resource)*a
-		if nc>=3 and not self._potatoModeActive then self._potatoModeActive=true;Aetherius.CoreOptimizer:SetQualityLevel(1) elseif nc<2 and self._potatoModeActive and self._state=="Normal" then self._potatoModeActive=false;Aetherius.CoreOptimizer:RestoreQuality() end
-	end
-
-	function Aetherius.Orchestrator:Update(deltaTime)
-		local historySize=60;if #self._fpsHistory<historySize then table_insert(self._fpsHistory,deltaTime);self._totalDeltaTime+=deltaTime else self._totalDeltaTime=self._totalDeltaTime-self._fpsHistory[self._historyIndex]+deltaTime;self._fpsHistory[self._historyIndex]=deltaTime;self._historyIndex=(self._historyIndex%historySize)+1 end
-		local n=os_clock();if n-self._lastCheck>0.5 then self:AnalyzeAndAdjust();self._lastCheck=n end
+	function Aetherius.Orch:SetState(s) if self._state==s then return end;self._state=s;if s=="Emergency"then for k,_ in pairs(self.aggr)do self.aggr[k]=5 end;Aetherius.CoreOpt:SetQuality(1);Aetherius.FxMgr:SetEmergency(true)elseif s=="Cooldown"then self._cdStart=os_c()elseif s=="Normal"then Aetherius.FxMgr:SetEmergency(false);local sA,e,d=tbl_c(self.aggr),0,self.REC_DUR;t_s(function()while e<d and self._state=="Normal"do local a=e/d;for k,v in pairs(sA)do self.aggr[k]=v+(2-v)*a end;e+=RS.Heartbeat:Wait()end;if self._state=="Normal"and not self._potato then Aetherius.CoreOpt:Restore()end end)end end
+	function Aetherius.Orch:Update(dt)
+		self._avgFps=me(-dt*2)*self._avgFps+(1-me(-dt*2))*(1/dt)
+		if not self._isCalibrated then return end;local s,af=self._state,self._avgFps
+		if s=="Normal"then if af<self.EMG_FPS then self:SetState("Emergency")end
+		elseif s=="Emergency"then if af>self.REC_FPS then self:SetState("Cooldown")end
+		elseif s=="Cooldown"then if af<self.EMG_FPS then self:SetState("Emergency")elseif os_c()-self._cdStart>self.CD_DUR then self:SetState("Normal")end end
+		if s~="Normal"then return end
+		local n=os_c();if n-self._lastCheck<0.5 then return end;self._lastCheck=n
+		local p=self.PROFS[4];if af>self.PROFS[2].f then p=self.PROFS[1]elseif af>self.PROFS[3].f then p=self.PROFS[2]else p=self.PROFS[3]end
+		local rs,ps,ms=af/p.f,WS:GetRealPhysicsFPS()/p.p,p.m/ST.Total.Value;local a=1-me(-0.5*2)
+		local nr,np,ne,nd,nc,nres=if rs<0.9 then rs<0.7 and 3 or 2 else 1,if ps<0.9 then ps<0.7 and 4 or 3 else 1,if rs<1 or ms<1 then rs<0.8 or ms<0.8 and 4 or 3 else 1,if rs<0.9 then rs<0.75 and 4 or 3 else 1,p==self.PROFS[4] and 3 or p==self.PROFS[3] and 2 or 1,if ms<0.8 then 3 else 1
+		self.aggr.render=self.aggr.render+(nr-self.aggr.render)*a;self.aggr.physics=self.aggr.physics+(np-self.aggr.physics)*a;self.aggr.effects=self.aggr.effects+(ne-self.aggr.effects)*a;self.aggr.density=self.aggr.density+(nd-self.aggr.density)*a;self.aggr.core=self.aggr.core+(nc-self.aggr.core)*a;self.aggr.resource=self.aggr.resource+(nres-self.aggr.resource)*a
+		if nc>=3 and not self._potato then self._potato=true;Aetherius.CoreOpt:SetQuality(1)elseif nc<2 and self._potato and s=="Normal"then self._potato=false;Aetherius.CoreOpt:Restore()end
 	end
 	
-	Aetherius.AutoTagger={SIMILARITY_THRESHOLD=15,PART_COUNT_THRESHOLD=50,EFFECT_COUNT_THRESHOLD=5}
-	function Aetherius.AutoTagger:Run()
-		print("Aetherius: AutoTagger started analysis...")
-		local similarObjects={};local function processModel(m)local pC,eC=0,0;for _,d in ipairs(m:GetDescendants())do if d:IsA("BasePart")then pC+=1 end;if d:IsA("ParticleEmitter")or d:IsA("Light")then eC+=1 end end;if pC>self.PART_COUNT_THRESHOLD and not CollectionService:HasTag(m,"ManagedRender")then CollectionService:AddTag(m,"ManagedRender")end;if eC>self.EFFECT_COUNT_THRESHOLD and not CollectionService:HasTag(m,"ManagedEffect")then CollectionService:AddTag(m,"ManagedEffect")end end
-		for _,i in ipairs(Workspace:GetDescendants())do if i:IsA("Model")and i.PrimaryPart then processModel(i)elseif i:IsA("MeshPart")then local k=i.MeshId;if k~=""then if not similarObjects[k]then similarObjects[k]={c=0,i={}}end;similarObjects[k].c+=1;table_insert(similarObjects[k].i,i)end end;if i.Parent==Workspace then task_wait()end end
-		for _,d in pairs(similarObjects)do if d.c>self.SIMILARITY_THRESHOLD then for _,o in ipairs(d.i)do if not CollectionService:HasTag(o,"Clutter")then CollectionService:AddTag(o,"Clutter")end end end end
-		print("Aetherius: AutoTagger finished analysis.")
+	Aetherius.AutoTag={SIM_THRESH=15,PART_THRESH=50,FX_THRESH=5}
+	function Aetherius.AutoTag:Run()
+		local similar={};local function proc(m)local pC,eC=0,0;for _,d in ipairs(m:GetDescendants())do if d:IsA("BasePart")then pC+=1 elseif d:IsA("ParticleEmitter")or d:IsA("Light")then eC+=1 end end;if pC>self.PART_THRESH and not CS:HasTag(m,"ManagedRender")then CS:AddTag(m,"ManagedRender")end;if eC>self.FX_THRESH and not CS:HasTag(m,"ManagedEffect")then CS:AddTag(m,"ManagedEffect")end end
+		for _,i in ipairs(WS:GetDescendants())do if i:IsA("Model")and i.PrimaryPart then proc(i)elseif i:IsA("MeshPart")then local k=i.MeshId;if k~=""then similar[k]=similar[k]or{c=0,i={}};similar[k].c+=1;tbl_i(similar[k].i,i)end end;if i.Parent==WS then t_w()end end
+		for _,d in pairs(similar)do if d.c>self.SIM_THRESH then for _,o in ipairs(d.i)do if not CS:HasTag(o,"Clutter")then CS:AddTag(o,"Clutter")end end end end
 	end
 
-	Aetherius.Calibrator={}
-	function Aetherius.Calibrator:Run()
-		task.wait(5);local d=5;local s={};local st=os_clock();while os_clock()-st<d do table_insert(s,1/RunService.Heartbeat:Wait())end;local sm=0;for _,f in ipairs(s)do sm+=f end;local af=sm/#s;local o=Aetherius.Orchestrator;o.PROFILES[1].f=math_max(60,af*0.9);o.PROFILES[2].f=math_max(45,af*0.7);o.PROFILES[3].f=math_max(30,af*0.5);o._isCalibrated=true;print("Aetherius: Calibration complete. Base FPS:",math_floor(af))
-	end
+	Aetherius.Calib={}
+	function Aetherius.Calib:Run()t_w(5);local d=5;local s,st={},os_c();while os_c()-st<d do tbl_i(s,1/RS.Heartbeat:Wait())end;local sm=0;for _,f in ipairs(s)do sm+=f end;local af=sm/#s;local o=Aetherius.Orch;o.PROFS[1].f=mmax(60,af*0.9);o.PROFS[2].f=mmax(45,af*0.7);o.PROFS[3].f=mmax(30,af*0.5);o._isCalibrated=true;end
+
+	Aetherius.Sched={_tasks={}}
+	function Aetherius.Sched:AddTask(t)local c=co_c(function()while true do pcall(t.fn,t.args or{})local a=Aetherius.Orch.aggr[t.category]or 1;t_w(t.interval*a)end end);tbl_i(self._tasks,c)end
+	function Aetherius.Sched:Run()for _,c in ipairs(self._tasks)do co_r(c)end end
+
+	Aetherius.Grid={GRID_SIZE=250,_grid={},_tracked=setmetatable({},{__mode="k"})}
+	function Aetherius.Grid:Register(o,d)if not(o and o:IsA("BasePart"))then return end;local s=self.GRID_SIZE;local k=mf(o.Position.X/s)..","..mf(o.Position.Y/s)..","..mf(o.Position.Z/s);self._grid[k]=self._grid[k]or{};tbl_i(self._grid[k],o);self._tracked[o]={cell=k,data=d}end
+	function Aetherius.Grid:GetNearby(p,r)local res,s={},self.GRID_SIZE;local cR=mf(r/s)+1;local cx,cy,cz=mf(p.X/s),mf(p.Y/s),mf(p.Z/s);for i=cx-cR,cx+cR do for j=cy-cR,cy+cR do for k=cz-cR,cz+cR do local c=self._grid[i..","..j..","..k];if c then for _,o in ipairs(c)do tbl_i(res,o)end end end end end;return res end
+
+	Aetherius.LOD={DIST_SQR={[1]={120^2,300^2,600^2},[2]={80^2,200^2,450^2},[3]={50^2,150^2,300^2},[4]={40^2,120^2,250^2},[5]={30^2,80^2,150^2}},CULL_DELAY=5,_culled={}}
+	function Aetherius.LOD:Register(m)if not m.PrimaryPart then return end;local p={};for _,d in ipairs(m:GetDescendants())do if d:IsA("BasePart")or d:IsA("Decal")then tbl_i(p,d)end end;Aetherius.Grid:Register(m.PrimaryPart,{LOD={p=p,m=m,lf=-1,lt=-1,lv=os_c(),isC=false}})end
+	function Aetherius.LOD:Update(cf)local a=mf(Aetherius.Orch.aggr.render+0.5);local l,cP=mcl(a,1,5),cf.Position;local lSqr=self.DIST_SQR[l];local nearby=Aetherius.Grid:GetNearby(cP,800);for _,pP in ipairs(nearby)do local t=Aetherius.Grid._tracked[pP];if not(pP and pP.Parent and t and t.data.LOD and not t.data.LOD.isC)then continue end;local dSqr,ld=(pP.Position-cP).MagnitudeSqr,t.data.LOD;local _,iV=Cam:WorldToViewportPoint(pP.Position);if iV then ld.lv=os_c()end;local nT,nF;if dSqr<lSqr[1]then nT,nF=0,2 elseif dSqr<lSqr[2]then nT,nF=0.75,1 else nT,nF=1,0 end;if ld.lt~=nT then for _,part in ipairs(ld.p)do if part:IsA("BasePart")then part.Transparency=nT end end;ld.lt=nT end;if ld.lf~=nF then local rf=Enum.RenderFidelity.fromValue(nF);for _,part in ipairs(ld.p)do if part:IsA("BasePart")then part.RenderFidelity=rf end end;ld.lf=nF end;if dSqr>lSqr[3]and(os_c()-ld.lv>self.CULL_DELAY)then ld.isC=true;tbl_i(self._culled,{o=ld.m,p=ld.m.Parent});ld.m.Parent=nil end end end
+	function Aetherius.LOD:CheckCulled(cP)for i=#self._culled,1,-1 do local cE=self._culled[i];local pP=cE.o.PrimaryPart;if not pP then tbl_r(self._culled,i)continue end;if(pP.Position-cP).Magnitude<700 then local t=Aetherius.Grid._tracked[pP];if t and t.data.LOD then t.data.LOD.isC=false;t.data.LOD.lv=os_c()end;cE.o.Parent=cE.p;tbl_r(self._culled,i)end end end
+
+	Aetherius.Physics={DIST_SQR={[1]=mh,[2]=250^2,[3]=150^2,[4]=80^2,[5]=40^2},SLEEP_VEL=0.4}
+	function Aetherius.Physics:Register(m)if not m.PrimaryPart then return end;local p={};for _,d in ipairs(m:GetDescendants())do if d:IsA("BasePart")and not d.Anchored then tbl_i(p,d)end end;if #p>0 then Aetherius.Grid:Register(m.PrimaryPart,{Physics={p=p}})end end
+	function Aetherius.Physics:Update(cP)local a=mf(Aetherius.Orch.aggr.physics+0.5);local l=mcl(a,1,5);local dSqr=self.DIST_SQR[l];local nearby=Aetherius.Grid:GetNearby(cP,500);for _,pP in ipairs(nearby)do local t=Aetherius.Grid._tracked[pP];if not(pP and pP.Parent and t and t.data.Physics)then continue end;local sA=(pP.Position-cP).MagnitudeSqr>dSqr or pP.AssemblyLinearVelocity.Magnitude<self.SLEEP_VEL;for _,p in ipairs(t.data.Physics.p)do if p and p.Anchored~=sA then p.Anchored=sA end end end end
 	
-	Aetherius.Scheduler={_tasks={}}
-	function Aetherius.Scheduler:AddTask(t)local c=coroutine_create(function()while true do pcall(t.fn)local a=Aetherius.Orchestrator._aggression[t.category]or 1;task_wait(t.baseInterval*a)end end);table_insert(self._tasks,c)end
-	function Aetherius.Scheduler:Run()for _,c in ipairs(self._tasks)do coroutine_resume(c)end end
+	Aetherius.FxMgr={DIST_CULL={[1]=500,[2]=300,[3]=150,[4]=80,[5]=0},_effects={},REC_TIME=4}
+	function Aetherius.FxMgr:Register(i)local aP=i:IsA("BasePart")and i or i:FindFirstAncestorWhichIsA("Model")and i:FindFirstAncestorWhichIsA("Model").PrimaryPart;if not aP then return end;local function pE(e)local oR=e:IsA("ParticleEmitter")and e.Rate;tbl_i(self._effects,{fx=e,anchor=aP,oR=oR})end;if i:IsA("ParticleEmitter")or i:IsA("Beam")or i:IsA("Trail")or i:IsA("Light")then pE(i)else for _,d in ipairs(i:GetDescendants())do if d:IsA("ParticleEmitter")or d:IsA("Beam")or d:IsA("Trail")or d:IsA("Light")then pE(d)end end end end
+	function Aetherius.FxMgr:SetEmergency(isE)t_s(function()local e,d=0,self.REC_TIME;local iR={};if not isE then for i,data in ipairs(self._effects)do if data.fx and data.fx:IsA("ParticleEmitter")then iR[i]=data.fx.Rate end end end;while e<d do local a=e/d;for i,data in ipairs(self._effects)do local ef=data.fx;if ef and ef.Parent and ef:IsA("ParticleEmitter")and data.oR then if isE then ef.Rate=0 else local sR=iR[i]or 0;ef.Rate=sR+(data.oR-sR)*a end end end;if isE then break else e+=RS.Heartbeat:Wait()end end end)end
+	function Aetherius.FxMgr:Update(cf)local a=mf(Aetherius.Orch.aggr.effects+0.5);local l=mcl(a,1,5);local cD,cP=self.DIST_CULL[l],cf.Position;for _,d in ipairs(self._effects)do local e,aP=d.fx,d.anchor;if not(e and e.Parent and aP and aP.Parent)then continue end;local _,iV=Cam:WorldToViewportPoint(aP.Position);local sE=iV and(aP.Position-cP).Magnitude<cD;if e.Enabled~=sE then e.Enabled=sE end end end
 
-	Aetherius.SpatialGrid={GRID_SIZE=250,_grid={},_tracked=setmetatable({},{__mode="k"})}
-	function Aetherius.SpatialGrid:GetCellKey(p)local s=self.GRID_SIZE;return math_floor(p.X/s)..","..math_floor(p.Y/s)..","..math_floor(p.Z/s)end
-	function Aetherius.SpatialGrid:Register(o,d)if not o or not o:IsA("BasePart")then return end;local k=self:GetCellKey(o.Position);self._grid[k]=self._grid[k]or{};table_insert(self._grid[k],o);self._tracked[o]={cell=k,data=d}end
-	function Aetherius.SpatialGrid:GetNearby(p,r)local res,s={},self.GRID_SIZE;local cR=math_floor(r/s)+1;local cx,cy,cz=math_floor(p.X/s),math_floor(p.Y/s),math_floor(p.Z/s);for i=cx-cR,cx+cR do for j=cy-cR,cy+cR do for k=cz-cR,cz+cR do local c=self._grid[i..","..j..","..k];if c then for _,o in ipairs(c)do table_insert(res,o)end end end end end;return res end
+	Aetherius.Density={CULL_PCNT={[1]=0,[2]=0.25,[3]=0.5,[4]=0.75,[5]=0.9},DIST_START=150,_culled={},_clutter={}}
+	function Aetherius.Density:Register(i)local pP=i:IsA("Model")and i.PrimaryPart or(i:IsA("BasePart")and i);if pP then tbl_i(self._clutter,{i=i,pP=pP,isC=false})end end
+	function Aetherius.Density:Update(cP)local a=mf(Aetherius.Orch.aggr.density+0.5);local l=mcl(a,1,5);local cPcnt=self.CULL_PCNT[l];if cPcnt==0 then self:RestoreAll()return end;local pTC={};for _,cD in ipairs(self._clutter)do if not cD.isC and(cD.pP.Position-cP).Magnitude>self.DIST_START then tbl_i(pTC,cD)end end;for i=1,mf(#pTC*cPcnt)do local cD=pTC[i];if not cD.isC then cD.isC=true;tbl_i(self._culled,{o=cD.i,p=cD.i.Parent,d=cD});cD.i.Parent=nil end end end
+	function Aetherius.Density:CheckRestore(cP)for i=#self._culled,1,-1 do local e=self._culled[i];if(e.d.pP.Position-cP).Magnitude<self.DIST_START*0.9 then e.d.isC=false;e.o.Parent=e.p;tbl_r(self._culled,i)end end end
+	function Aetherius.Density:RestoreAll()for i=#self._culled,1,-1 do local e=self._culled[i];e.d.isC=false;e.o.Parent=e.p;tbl_r(self._culled,i)end end
 
-	Aetherius.LODSystem={DISTANCES_SQR={[1]={120^2,300^2,600^2},[2]={80^2,200^2,450^2},[3]={50^2,150^2,300^2},[4]={40^2,120^2,250^2},[5]={30^2,80^2,150^2}},CULL_DELAY=5,_culled={}}
-	function Aetherius.LODSystem:Register(m)if not m.PrimaryPart then return end;local p={};for _,d in ipairs(m:GetDescendants())do if d:IsA("BasePart")or d:IsA("Decal")then table_insert(p,d)end end;Aetherius.SpatialGrid:Register(m.PrimaryPart,{LOD={parts=p,model=m,lastFidelity=-1,lastTrans=-1,lastVisibleTime=os_clock(),isCulled=false}})end
-	function Aetherius.LODSystem:Update(cf)local a=math_floor(Aetherius.Orchestrator._aggression.render+0.5);local l=math_clamp(a,1,5);local lSqr=self.DISTANCES_SQR[l];local cP=cf.Position;local nearby=Aetherius.SpatialGrid:GetNearby(cP,800);for _,pP in ipairs(nearby)do local t=Aetherius.SpatialGrid._tracked[pP];if not(pP and pP.Parent and t and t.data.LOD and not t.data.LOD.isCulled)then continue end;local dSqr=(pP.Position-cP).MagnitudeSqr;local ld=t.data.LOD;local _,iV=Camera:WorldToViewportPoint(pP.Position);if iV then ld.lastVisibleTime=os_clock()end;local nT,nF;if dSqr<lSqr[1]then nT,nF=0,Enum.RenderFidelity.Precise elseif dSqr<lSqr[2]then nT,nF=0.75,Enum.RenderFidelity.Automatic else nT,nF=1,Enum.RenderFidelity.Performance end;if ld.lastTrans~=nT then for _,p in ipairs(ld.parts)do if p:IsA("BasePart")then p.Transparency=nT end end;ld.lastTrans=nT end;if ld.lastFidelity~=nF then for _,p in ipairs(ld.parts)do if p:IsA("BasePart")then p.RenderFidelity=nF end end;ld.lastFidelity=nF end;if dSqr>lSqr[3]and(os_clock()-ld.lastVisibleTime>self.CULL_DELAY)then ld.isCulled=true;table_insert(self._culled,{obj=ld.model,parent=ld.model.Parent});ld.model.Parent=nil end end end
-	function Aetherius.LODSystem:CheckCulled(cP)for i=#self._culled,1,-1 do local cE=self._culled[i];local pP=cE.obj.PrimaryPart;if not pP then table_remove(self._culled,i)continue end;if(pP.Position-cP).Magnitude<700 then local t=Aetherius.SpatialGrid._tracked[pP];if t and t.data.LOD then t.data.LOD.isCulled=false;t.data.LOD.lastVisibleTime=os_clock()end;cE.obj.Parent=cE.parent;table_remove(self._culled,i)end end end
-
-	Aetherius.PhysicsGovernor={DISTANCES_SQR={[1]=math_huge,[2]=250^2,[3]=150^2,[4]=80^2,[5]=40^2},SLEEP_VELOCITY=0.4}
-	function Aetherius.PhysicsGovernor:Register(m)if not m.PrimaryPart then return end;local p={};for _,d in ipairs(m:GetDescendants())do if d:IsA("BasePart")and not d.Anchored then table_insert(p,d)end end;if #p>0 then Aetherius.SpatialGrid:Register(m.PrimaryPart,{Physics={parts=p}})end end
-	function Aetherius.PhysicsGovernor:Update(cP)local a=math_floor(Aetherius.Orchestrator._aggression.physics+0.5);local l=math_clamp(a,1,5);local dSqr=self.DISTANCES_SQR[l];local nearby=Aetherius.SpatialGrid:GetNearby(cP,500);for _,pP in ipairs(nearby)do local t=Aetherius.SpatialGrid._tracked[pP];if not(pP and pP.Parent and t and t.data.Physics)then continue end;local sA=(pP.Position-cP).MagnitudeSqr>dSqr or pP.AssemblyLinearVelocity.Magnitude<self.SLEEP_VELOCITY;for _,p in ipairs(t.data.Physics.parts)do if p and p.Anchored~=sA then p.Anchored=sA end end end end
-	
-	Aetherius.EffectManager={DISTANCE_CULL={[1]=500,[2]=300,[3]=150,[4]=80,[5]=40},_registeredEffects={},RECOVERY_TIME=4}
-	function Aetherius.EffectManager:Register(i)local aP=i:IsA("BasePart")and i or i:FindFirstAncestorWhichIsA("Model")and i:FindFirstAncestorWhichIsA("Model").PrimaryPart;if not aP then return end;local function pE(e)local oR=e:IsA("ParticleEmitter")and e.Rate or nil;table_insert(self._registeredEffects,{effect=e,anchor=aP,originalRate=oR})end;if i:IsA("ParticleEmitter")or i:IsA("Beam")or i:IsA("Trail")or i:IsA("Light")then pE(i)end;for _,d in ipairs(i:GetDescendants())do if d:IsA("ParticleEmitter")or d:IsA("Beam")or d:IsA("Trail")or d:IsA("Light")then pE(d)end end end
-	function Aetherius.EffectManager:EnterEmergencyMode(isEmergency)task_spawn(function()local e,d=0,self.RECOVERY_TIME;local iR={};if not isEmergency then for i,data in ipairs(self._registeredEffects)do if data.effect and data.effect:IsA("ParticleEmitter")then iR[i]=data.effect.Rate end end end;while e<d do local a=e/d;for i,data in ipairs(self._registeredEffects)do local ef=data.effect;if ef and ef.Parent and ef:IsA("ParticleEmitter")and data.originalRate then if isEmergency then ef.Rate=data.originalRate*0.1 else local sR=iR[i]or 0;ef.Rate=sR+(data.originalRate-sR)*a end end end;if not isEmergency then e+=RunService.Heartbeat:Wait()else break end end end)end
-	function Aetherius.EffectManager:Update(cf)local a=math_floor(Aetherius.Orchestrator._aggression.effects+0.5);local l=math_clamp(a,1,5);local cD=self.DISTANCE_CULL[l];local cP=cf.Position;for _,d in ipairs(self._registeredEffects)do local e,aP=d.effect,d.anchor;if not(e and e.Parent and aP and aP.Parent)then continue end;local _,iV=Camera:WorldToViewportPoint(aP.Position);local dist=(aP.Position-cP).Magnitude;local sE=iV and dist<cD;if e.Enabled~=sE then e.Enabled=sE end end end
-
-	Aetherius.DensityManager={CULL_PERCENTAGE={[1]=0,[2]=0.25,[3]=0.5,[4]=0.75,[5]=0.9},CULL_DISTANCE_START=150,_culledObjects={},_registeredClutter={}}
-	function Aetherius.DensityManager:Register(i)local pP=i:IsA("Model")and i.PrimaryPart or(i:IsA("BasePart")and i);if not pP then return end;table_insert(self._registeredClutter,{instance=i,primaryPart=pP,isCulled=false})end
-	function Aetherius.DensityManager:Update(cP)local a=math_floor(Aetherius.Orchestrator._aggression.density+0.5);local l=math_clamp(a,1,5);local cPcnt=self.CULL_PERCENTAGE[l];if cPcnt==0 then self:RestoreAll()return end;local pTC={};for _,cD in ipairs(self._registeredClutter)do if not cD.isCulled then local d=(cD.primaryPart.Position-cP).Magnitude;if d>self.CULL_DISTANCE_START then table_insert(pTC,cD)end end end;local aTC=math_floor(#pTC*cPcnt);for i=1,aTC do local cD=pTC[i];if not cD.isCulled then cD.isCulled=true;local o=cD.instance;table_insert(self._culledObjects,{obj=o,parent=o.Parent,data=cD});o.Parent=nil end end end
-	function Aetherius.DensityManager:CheckRestoration(cP)for i=#self._culledObjects,1,-1 do local e=self._culledObjects[i];local d=(e.data.primaryPart.Position-cP).Magnitude;if d<self.CULL_DISTANCE_START*0.9 then e.data.isCulled=false;e.obj.Parent=e.parent;table_remove(self._culledObjects,i)end end end
-	function Aetherius.DensityManager:RestoreAll()for i=#self._culledObjects,1,-1 do local e=self._culledObjects[i];e.data.isCulled=false;e.obj.Parent=e.parent;table_remove(self._culledObjects,i)end end
-
-	Aetherius.ResourceSentinel={_assets={},UNLOAD_TIME=120}
-	function Aetherius.ResourceSentinel:Track(id)if type(id)=="string"and id:match("^rbx")then self._assets[id]=os_clock()end end
-	function Aetherius.ResourceSentinel:Cleanup()local tU,n={},os_clock();local a=Aetherius.Orchestrator._aggression.resource;for id,lU in pairs(self._assets)do if n-lU>self.UNLOAD_TIME*a then table_insert(tU,id);self._assets[id]=nil end end;if #tU>0 then ContentProvider:UnloadAssets(tU)end end
-	Aetherius.CoreOptimizer={}
-	function Aetherius.CoreOptimizer:SetQualityLevel(l)GameSettings.SavedQualityLevel=Enum.SavedQualitySetting["QualityLevel"..l];Lighting.Technology=Enum.Technology.Compatibility;Lighting.Shadows=false;end
-	function Aetherius.CoreOptimizer:RestoreQuality()GameSettings.SavedQualityLevel=Enum.SavedQualitySetting.Automatic;Lighting.Technology=Enum.Technology.ShadowMap;Lighting.Shadows=true;end
+	Aetherius.ResSentinel={_assets={},UNLOAD_TIME=120}
+	function Aetherius.ResSentinel:Track(id)if type(id)=="string"and id:match("^rbx")then self._assets[id]=os_c()end end
+	function Aetherius.ResSentinel:Cleanup()local tU,n={},os_c();local a=Aetherius.Orch.aggr.resource;for id,lU in pairs(self._assets)do if n-lU>self.UNLOAD_TIME*a then tbl_i(tU,id);self._assets[id]=nil end end;if #tU>0 then CP:UnloadAssets(tU)end end
+	Aetherius.CoreOpt={}
+	function Aetherius.CoreOpt:SetQuality(l)UGS.SavedQualityLevel=Enum.SavedQualitySetting["QualityLevel"..l];LI.Technology=0;LI.Shadows=false;end
+	function Aetherius.CoreOpt:Restore()UGS.SavedQualityLevel=3;LI.Technology=2;LI.Shadows=true;end
 
 	function Aetherius:Activate()
-		print("Activating Aetherius Engine v1.0 with Cooldown Logic...")
-		
-		task_spawn(self.Calibrator.Run)
-		task_spawn(self.AutoTagger.Run)
-		
-		local function processInstance(instance)
-			if not instance then return end
-			if CollectionService:HasTag(instance,"ManagedRender")then self.LODSystem:Register(instance)end
-			if CollectionService:HasTag(instance,"ManagedPhysics")then self.PhysicsGovernor:Register(instance)end
-			if CollectionService:HasTag(instance,"ManagedEffect")then self.EffectManager:Register(instance)end
-			if CollectionService:HasTag(instance,"Clutter")then self.DensityManager:Register(instance)end
-		end
-
-		local tags={"ManagedRender","ManagedPhysics","ManagedEffect","Clutter"}
-		for _,t in ipairs(tags)do for _,i in ipairs(CollectionService:GetTagged(t))do task_spawn(processInstance,i)end;CollectionService:GetInstanceAddedSignal(t):Connect(processInstance)end
-		
-		Workspace.DescendantAdded:Connect(function(d)if d:IsA("Sound")then self.ResourceSentinel:Track(d.SoundId)elseif d:IsA("ImageLabel")or d:IsA("ImageButton")or d:IsA("Texture")then self.ResourceSentinel:Track(d.Image)end end)
-
-		self.Scheduler:AddTask({name="Orchestrator",fn=function()self.Orchestrator:Update(RunService.Heartbeat:Wait())end,baseInterval=0,category="core"})
-		self.Scheduler:AddTask({name="LOD",fn=function()self.LODSystem:Update(Camera.CFrame)end,baseInterval=0.1,category="render"})
-		self.Scheduler:AddTask({name="Physics",fn=function()self.PhysicsGovernor:Update(Camera.CFrame.Position)end,baseInterval=0.2,category="physics"})
-		self.Scheduler:AddTask({name="Effects",fn=function()self.EffectManager:Update(Camera.CFrame)end,baseInterval=0.15,category="effects"})
-		self.Scheduler:AddTask({name="Density",fn=function()self.DensityManager:Update(Camera.CFrame.Position)end,baseInterval=0.5,category="density"})
-		self.Scheduler:AddTask({name="CulledCheck",fn=function()self.LODSystem:CheckCulled(Camera.CFrame.Position);self.DensityManager:CheckRestoration(Camera.CFrame.Position)end,baseInterval=1,category="render"})
-		self.Scheduler:AddTask({name="Resources",fn=function()self.ResourceSentinel:Cleanup()end,baseInterval=15,category="resource"})
-		
-		self.Scheduler:Run()
-		print("Aetherius Engine v1.0 is now fully autonomous and active. Enjoy!")
+		t_s(self.Calib.Run);t_s(self.AutoTag.Run)
+		local function proc(i)if not i then return end;if CS:HasTag(i,"ManagedRender")then self.LOD:Register(i)end;if CS:HasTag(i,"ManagedPhysics")then self.Physics:Register(i)end;if CS:HasTag(i,"ManagedEffect")then self.FxMgr:Register(i)end;if CS:HasTag(i,"Clutter")then self.Density:Register(i)end end
+		local tags={"ManagedRender","ManagedPhysics","ManagedEffect","Clutter"};for _,t in ipairs(tags)do for _,i in ipairs(CS:GetTagged(t))do t_s(proc,i)end;CS:GetInstanceAddedSignal(t):Connect(proc)end
+		WS.DescendantAdded:Connect(function(d)if d:IsA("Sound")then self.ResSentinel:Track(d.SoundId)elseif d:IsA("ImageLabel")or d:IsA("ImageButton")or d:IsA("Texture")then self.ResSentinel:Track(d.Image)end end)
+		self.Sched:AddTask({name="Orchestrator",fn=function()self.Orch:Update(RS.Heartbeat:Wait())end,interval=0,category="core"})
+		local cf;self.Sched:AddTask({name="MainUpdate",fn=function()cf=Cam.CFrame;self.LOD:Update(cf);self.Physics:Update(cf.Position);self.FxMgr:Update(cf)self.Density:Update(cf.Position)end,interval=0.1,category="core"})
+		self.Sched:AddTask({name="CulledCheck",fn=function()local cP=Cam.CFrame.Position;self.LOD:CheckCulled(cP);self.Density:CheckRestore(cP)end,interval=1,category="render"})
+		self.Sched:AddTask({name="Resources",fn=function()self.ResSentinel:Cleanup()end,interval=15,category="resource"})
+		self.Sched:Run()
 	end
 end
-
 Aetherius:Activate()
